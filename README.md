@@ -22,19 +22,19 @@ All commands are in the format [#,][#]L where [#,] is an optional saved number, 
 
 Op   | Description
 ---- | ---
-#?   | Return binary value of digital pin, and value for analog input if supported by the pin. If # and default # (set by comma command, see below) are zero or ommitted, ? returns all pins and analog values at once. e.g. `1?` might return `{"1":[1,459]} ` indicating the pin is digital high, and analog 459 counts.
-#I   | Set pin # to an input. e.g. 3I
-#P   | Set pin # to an input with internal pullup. 4P
-#H   | Set pin # to a high output. 3H4H
-#L   | Set pin # to a low output. 5L4L3L
-#D   | Delay # microseconds between each command, with a minimum of about 47uS
-#,   | Comma. Saves pin # as the default pin for all commands e.g. 3,HLHLHL
-#A   | Set pin # to an analog output with value. Only PWM outputs will respond. Use with comma command e.g. 5,120A will put 120 on pin 5
-#S   | Servo angle. Send number then S to set the servo to that position.
-`_-`   | "low high clocked" Puts out a set of low and high signals on # with a clock on #, e.g. `5,11-__-_--_` clocks out 10010110 on pin 11, with clock pulses on pin 5. Clock is currently falling edge only. `5,11-` is basically `5L11H5H5L11L`
-`.`    | reads data back from # while clocking #, e.g. `5L 11H 5,11-__-_--_. .........` clocks out 10010110, gets the ack, and then 8 bits of data and a final ack.
-(    | I2C start with # as SDA and #, as SCL
-)    | I2C stop with # as SDA and #, as SCL. Pins left floating pulled up. e.g. `5,11(-__-_--_. .........)` starts, 10010110, gets ack, data, ack, stop
+`#?` | Return binary value of digital pin, and value for analog input if supported by the pin. If # and default # (set by comma command, see below) are zero or ommitted, ? returns all pins and analog values at once. e.g. `1?` might return `{"1":[1,459]} ` indicating the pin is digital high, and analog 459 counts.
+`#I` | Set pin # to an input. e.g. 3I
+`#P` | Set pin # to an input with internal pullup. 4P
+`#H` | Set pin # to a high output. 3H4H
+`#L` | Set pin # to a low output. 5L4L3L
+`#D` | Delay # microseconds between each command, with a minimum of about 47uS
+`#,` | Comma. Saves pin # as the default pin for all commands e.g. 3,HLHLHL
+`#A` | Set pin # to an analog output with value. Only PWM outputs will respond. Use with comma command e.g. 5,120A will put 120 on pin 5
+`#S` | Servo angle. Send number then S to set the servo to that position.
+`_-` | "low high clocked" Puts out a set of low and high signals on `#` with a clock on `#,` e.g. `5,11-__-_--_` clocks out 10010110 on pin 11, with clock pulses on pin 5. Clock is currently falling edge only. `5,11-` is basically `5L11H5H5L11L`
+`.`  | "in clock" Reads data back from `#` while clocking `#,` e.g. `5L 11H 5,11-__-_--_. .........` clocks out 10010110, gets the ack, and then 8 bits of data and a final ack.
+`(`  | I2C start with `#` as SDA and `#,` as SCL
+`)`  | I2C stop with `#` as SDA and `#,` as SCL. Pins left floating pulled up. e.g. `5,11(-__-_--_. .........)` starts, 10010110, gets ack, data, ack, stop
 
 Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
 are all ignored. If no n is specified, value previously saved by , is used.
