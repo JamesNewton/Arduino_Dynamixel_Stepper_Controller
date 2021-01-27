@@ -11,12 +11,10 @@ Note: It does NOT communicate via the Arduino USB adapter during normal operatio
 
 Simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
 clock out data with timing, and read all or a single pin back via serial IO. 
-Written for the tiny-circuits.com TinyDuino in the end effector of the 
-Dexter robot from HDRobotic.com, but generally useful to turn the Arduino
-into a tool for generating test signals, and reading back results. Not as 
-powerful as the busPirate, but more flexible in some ways and much easier to
-operate. Not a replacement for Firmata as this is intended to be used by a 
-human directly via serial monitor or terminal, not from a program.
+
+Generally useful to turn the Arduino into a tool for generating test signals, and reading back results. 
+- Not as powerful as the busPirate or LabNation SmartScope, but more flexible in some ways and much easier to operate. And it runs a Servo.
+- Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a Pi or other high level robot controller. And it does not provide high level drivers for a fixed set of devices. It is more useful as means of developing drivers. 
 
 ## Commands
 
@@ -87,20 +85,20 @@ are all ignored. If no n is specified, value previously saved by , is used.
 ### BOM
 qty | item | price | source
 ----|------|-------|---------------
-1   | Arduino | ~$25 | Arduino.cc (please support Arduino by buying real parts?)
+1   | Arduino | ~$25 | Arduino.cc (please support Arduino by buying real parts instead of cheap crappy knockoffs?)
 1   | Shield  | $20  | http://en.robotis.com/shop_en/item.php?it_id=902-0146-000
 1   | TTL Serial USB adapter | ~$2 | Google CP2102 or e.g.<BR> https://www.amazon.com/Diymore-Converter-Support-Windows-Arduino/dp/B0776T51YT/ref=sr_1_9
 1   | 12V adapter | ~$9 | Google AC/DC power adapter. e.g. <BR> https://www.amazon.com/Converter-Cigarette-Lighter-110-240V-Adapter/dp/B07DWXRD5F/ref=sr_1_4
-1   | 4 pin JST cable | $? | ???
+1   | 4 pin JST cable | $? | Commonly available from hobby stores, online, etc... 
 
 See: 
 https://emanual.robotis.com/docs/en/parts/interface/dynamixel_shield/ 
-for instructions and connections. 
+for instructions and connections on the Shield. 
 
 ### BUILD:
 1. Install Dynamixel libraries into Arduino IDE (must be 1.8.5 or up) via menu: "Sketch" / "Include Libraries" / "Manage Libraries" and then search for Dynamixel. Select and then "Install" the DYNAMIXEL2Arduino and then DynamixelShield 
 2. Download the .ino file above and place in folder of the same name under Arduino folder. e.g. Documents\Arduino\DynamixelShieldSetup\DynamixelShieldSetup.ino and open it. 
-3. Modify the NEW_BAUDRATE value around line 50 to the one you want. 
+3. Modify the BAUD value around line 50 to what your servo uses (default is 57600), SERVO_ID to match the servo address (default is 1) and SERVO_MODE to match the mode (default is the extended position mode which might not be supported on your servo)
 4. Connect the Arduino /without the shield/ and program it. 
 5. Connect the TTL serial adapter TTL Serial USB adapter to J3 on the shield. This is the small 4 pin connector off by itself near the green power terminal. 
 
@@ -111,7 +109,7 @@ V | don't connect
 R | TX
 T | RX
 
-6. Cut the 12 volt adapter wires and strip them, then /carefully/ test to see which wire is positive and which negative before connecting to the shield. Getting that backwards will cost rather a lot. 
+6. Cut the 12 volt adapter wires and strip them, then /carefully/ test to see which wire is positive and which negative before connecting to the shield. Getting that backwards will cost rather a lot. You should also be able to just use the barrel connector on the Arduino if you have the right adapter for that.
 7. Plug the shield onto the Arduino.
 
 ### OPERATE:
