@@ -10,7 +10,6 @@ Arduino_Dynamixel_Controller.ino
  Set the SERVO_ID, SERVO_MODE, and BAUD defines below as needed (pre-set to defaults).
  Note this changes the command serial port and requires a seperate USB/Serial adapter 
  on the DYNAMIXELShield UART RX/TX connector.
-
 Simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
 clock out data with timing, and read all or a single pin back via serial IO. 
 Written for the tiny-circuits.com TinyDuino in the end effector of the 
@@ -41,40 +40,29 @@ _-  //low high clocked puts out the set of low and high signals shown on # with
 (   //I2C start with # as SDA and #, as SCL
 )   //I2C stop with # as SDA and #, as SCL. Pins left floating pulled up.
     // e.g. 5,11(-__-_--_. .........) starts, 10010110, gets ack, data, ack, stop
-
 Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
 are all ignored. If no n is specified, value previously saved by , is used.
-
 Examples:
-
 ?
 //returns something like: {"?":["10010000001111",739,625,569,525,493,470]}
 // where 10010000001111 shows the binary value of each pin, from 0 to 14. Pin 0 is first
 // 739,625,569,525,493,470 are the values read from each analog channel 0 to 5
-
 1?
 //returns something like: {"1":[1,459]} where 1 is the binary value of pin 1 and 
 //459 is the analog value of channel 1
-
 6?
 //returns something like {"6":[0]} which is the value of pin 6 (no analog)
-
 4L 6H 5,120A
 //(nothing returned) Drives pin 4 low, pin 6 high and puts a PWM / Analog value of 120 on pin 5
 //this also saves pin 5 as the default pin for all commands from now on
-
 240A
 //(nothing returned) assuming prior command was 5,120A put 240 out pin 5 as new analog value
-
 90S
 //(nothing returned) move the attached Dynamixel servo to 90 degrees.
-
 ?
 //assuming 5, has been recieved before, returns just the value of pin 5 and analog 5
-
 0,
 //(nothing returned) clears saved pin, ? now returns all pins.
-
 1000D 5,LHLHLHL
 //(nothing returned) delay is 1 millisecond between commands. So pin 5 pulse 3 times at ~200Hz
 //Actually about 1.04mS because of the time it takes to recieve and interpret each command. 
@@ -86,7 +74,6 @@ Examples:
 //53D would work. Take the uS delay you want and subtract 47.
 //With larger delays, the error is consistant but has relativly less effect.
 // Note that the CYCLE_DELAY is not used as long as new characters are available.
-
 */
 #include <Dynamixel2Arduino.h>
 
@@ -146,7 +133,6 @@ char cmd;
 https://playground.arduino.cc/Code/PwmFrequency
 Pins 9 and 10 run at 31250Hz from Timer1 which is only used for servo. 
 3 and 11 are on Timer2, 5 and 6 on Timer0. These are also used for delay, millis, etc...
-
 So limiting our changes to Timer1 and pins 9 and 10 allows us to still have timing.
  switch(divisor) {
       case 1: mode = 0x01; break;   //31250Hz
@@ -156,7 +142,6 @@ So limiting our changes to Timer1 and pins 9 and 10 allows us to still have timi
       case 1024: mode = 0x05; break;//30.517578125Hz
     }
       TCCR1B = TCCR1B & 0b11111000 | mode;
-
 https://www.arduino.cc/en/Tutorial/SecretsOfArduinoPWM
 Says only Timer0 is used for delay and millis... 
 We can try changing 3 and 11 on Timer2 
@@ -170,12 +155,9 @@ T2  T1 / Freq
 0x06 4 256 122.0703125
 0x07 5 1024  30.517578125
 TCCR2B = TCCR2B & 0b11111000 | mode;
-
 if (n>2) n--; //1,2,2,3,4,5,6
 if (n>3) n--; //1,2,2,3,3,4,5
-
 formula is f = clock / (510 * mode) where clock=16MHz
-
 If you mess with TCCR0B, delay can be compensated as follows
 0x01: delay(64000) or 64000 millis() ~ 1 second
 0x02: delay(8000) or 8000 millis() ~ 1 second
@@ -183,11 +165,9 @@ If you mess with TCCR0B, delay can be compensated as follows
 0x04: delay(250) or 250 millis() ~ 1 second
 0x05: delay(62) or 62 millis() ~ 1 second
 (Or 63 if you need to round up.  The number is actually 62.5)
-
 void setPin9_10PWMFreq(freq) {
   
 }
-
 */
 
 void delayus(unsigned long us) {
@@ -201,13 +181,17 @@ void delayus(unsigned long us) {
 void setup() {
   DEBUG_SERIAL.begin(BAUD);
   while(!DEBUG_SERIAL); //Wait until the serial port is opened
-  DEBUG_SERIAL.print("[{\"Ready\": \"true\"}]");
+  DEBUG_SERIAL.println("[{\"Ready\": \"true\"}]");
   dxl.setPortProtocolVersion(2.0);
   dxl.begin(BAUD);
   dxl.torqueOff(SERVO_ID);
   //dxl.writeControlTableItem(11, SERVO_ID, 4); //Set extended position/multi-turn mode, 11 = OPERATING_MODE
-  dxl.setOperatingMode(SERVO_ID, SERVO_MODE);
-  dxl.torqueOn(SERVO_ID);
+ if (dxl.setOperatingMode(SERVO_ID, SERVO_MODE)){
+  DEBUG_SERIAL.println("[{\"ServoMode\": \"Set\"}]");
+ }
+  if (dxl.torqueOn(SERVO_ID)){
+    DEBUG_SERIAL.println("[{\"ServoTorque\": \"On\"}]");
+  }
   n=0; //number
   p=0; //pin number
   d=2; //delay. Default is 2uS or 250KHz
@@ -301,7 +285,11 @@ void loop(){
         d=n;
         break;
       case 'S': //PWM speed 5 allows servos, 4 is default.
-        dxl.setGoalPosition(SERVO_ID, n, UNIT_DEGREE);
+        if (dxl.setGoalPosition(SERVO_ID, n, UNIT_DEGREE)){
+          DEBUG_SERIAL.print("[{\"ServoGoal\": ");
+          DEBUG_SERIAL.print(n);
+          DEBUG_SERIAL.println("}]");
+        }
         break;
       case '\n': 
       case '\r':
