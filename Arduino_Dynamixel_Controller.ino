@@ -10,6 +10,9 @@ Arduino_Dynamixel_Controller.ino
  Set the SERVO_ID, SERVO_MODE, and BAUD defines below as needed (pre-set to defaults).
  Note this changes the command serial port and requires a seperate USB/Serial adapter 
  on the DYNAMIXELShield UART RX/TX connector.
+//20200203 James Newton / Tyler Skelton updated to support readback of servo position, torque, and 
+ velocity and to set max "current" (torque(ish)) when moving. 
+
 Simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
 clock out data with timing, and read all or a single pin back via serial IO. 
 Written for the tiny-circuits.com TinyDuino in the end effector of the 
@@ -18,30 +21,34 @@ into a tool for generating test signals, and reading back results. Not as
 powerful as the busPirate, but more flexible in some ways and much easier to
 operate. Not a replacement for Firmata as this is intended to be used by a 
 human directly via serial monitor or terminal, not from a program.
+
 Commands:
-#?  //return binary value of digital pin, and value for analog input if exists
-    //if # and default # (set by comma command, see below) are zero or ommitted  
-    //? returns all pins and analog values at once.
-#I  //set pin # to an input. e.g. 3I
-#P  //set pin # to an input with internal pullup. 4P
-#H  //set pin # to a high output. 3H4H
-#L  //set pin # to a low output. 5L4L3L
-#D  //delay # microseconds between each command, with a minimum of about 47uS
-#,  //comma. Saves pin # as the default pin for all commands e.g. 3,HLHLHL
-#A  //set pin # to an analog output with value. Only PWM outputs will respond.
-    // use with comma command e.g. 5,120A will put 120 on pin 5
-#S  //Servo angle. Send number then S to set the servo to that position.
-_-  //low high clocked puts out the set of low and high signals shown on # with
-    // a clock on #, e.g. 5,11-__-_--_ clocks out 10010110 on pin 11, with clock 
-    // pulses on pin 5. Clock is currently falling edge only. 
-.   //reads data back from # while clocking #, 
-    // e.g. 5L 11H 5,11-__-_--_. ......... clocks out 10010110, gets the ack, and 
-    // then 8 bits of data and a final ack.
-(   //I2C start with # as SDA and #, as SCL
-)   //I2C stop with # as SDA and #, as SCL. Pins left floating pulled up.
-    // e.g. 5,11(-__-_--_. .........) starts, 10010110, gets ack, data, ack, stop
+#?   //return binary value of digital pin, and value for analog input if exists
+     //if # and default # (set by comma command, see below) are zero or ommitted  
+     //? returns all pins and analog values at once.
+#I   //set pin # to an input. e.g. 3I
+#P   //set pin # to an input with internal pullup. 4P
+#H   //set pin # to a high output. 3H4H
+#L   //set pin # to a low output. 5L4L3L
+#D   //delay # microseconds between each command, with a minimum of about 47uS
+#,   //comma. Saves # as the default for all commands e.g. 3,HLHLHLI
+#,#A //set pin # to an analog output with value. Only PWM outputs will respond.
+     // use with comma command e.g. 5,120A will put 120 on pin 5
+#,#S //Servo angle. Send percent of max torque, then position, to set torque and position. 
+     // e.g. 50,90S moves at half strength to 90 degrees. 
+_-   //low high clocked puts out the set of low and high signals shown on # with
+     // a clock on #, e.g. 5,11-__-_--_ clocks out 10010110 on pin 11, with clock 
+     // pulses on pin 5. Clock is currently falling edge only. 
+.    //reads data back from # while clocking #, 
+     // e.g. 5L 11H 5,11-__-_--_. ......... clocks out 10010110, gets the ack, and 
+     // then 8 bits of data and a final ack.
+(    //I2C start with # as SDA and #, as SCL
+)    //I2C stop with # as SDA and #, as SCL. Pins left floating pulled up.
+     // e.g. 5,11(-__-_--_. .........) starts, 10010110, gets ack, data, ack, stop
+     
 Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
 are all ignored. If no n is specified, value previously saved by , is used.
+
 Examples:
 ?
 //returns something like: {"?":["10010000001111",739,625,569,525,493,470]}
@@ -57,8 +64,8 @@ Examples:
 //this also saves pin 5 as the default pin for all commands from now on
 240A
 //(nothing returned) assuming prior command was 5,120A put 240 out pin 5 as new analog value
-90S
-//(nothing returned) move the attached Dynamixel servo to 90 degrees.
+100,90S
+//(nothing returned) move the attached Dynamixel servo to 90 degrees at full strength.
 ?
 //assuming 5, has been recieved before, returns just the value of pin 5 and analog 5
 0,
@@ -75,6 +82,7 @@ Examples:
 //With larger delays, the error is consistant but has relativly less effect.
 // Note that the CYCLE_DELAY is not used as long as new characters are available.
 */
+
 #include <Dynamixel2Arduino.h>
 
 // Please modify it to suit your hardware.
@@ -215,25 +223,44 @@ void loop(){
           DEBUG_SERIAL.print("\"?\":[\""); //optional, just to signal start of data
           for (int p = 0; p < DIGITAL_PINS; p++) { //get all the pins
             //n = digitalRead(p) + n<<1;   //convert to binary number
-            DEBUG_SERIAL.print(digitalRead(p));//and also print.
+            if (DXL_DIR_PIN != p) { //don't mess with the servo pins
+              DEBUG_SERIAL.print(digitalRead(p));//and also print.
+              }
             }
           DEBUG_SERIAL.print("\"");
           //DEBUG_SERIAL.print(n); //print the binary value of all pins
           for (int p = 0; p < ANALOG_PINS; p++) { //also check all the analog
-            DEBUG_SERIAL.print(",");
-            DEBUG_SERIAL.print(analogRead(p));
+            if (DXL_DIR_PIN != p) { //don't mess with the servo pins
+              DEBUG_SERIAL.print(",");
+              DEBUG_SERIAL.print(analogRead(p));
+              }
             }
+          DEBUG_SERIAL.print(",");
+          DEBUG_SERIAL.print(dxl.getPresentPosition(SERVO_ID, UNIT_DEGREE));
+          DEBUG_SERIAL.print(",");
+          DEBUG_SERIAL.print(dxl.getPresentCurrent(SERVO_ID, UNIT_PERCENT));
+          DEBUG_SERIAL.print(",");
+          DEBUG_SERIAL.print(dxl.getPresentVelocity(SERVO_ID, UNIT_RPM));
           }
         else {
-         DEBUG_SERIAL.print("\"");
-         DEBUG_SERIAL.print(n);
-         DEBUG_SERIAL.print("\":[");
-         DEBUG_SERIAL.print(digitalRead(n)); //just that one pin
-         if (ANALOG_PINS > n) { //if there is an analog channel
-            DEBUG_SERIAL.print(",");
-            DEBUG_SERIAL.print(analogRead(p)); //also return it
+          DEBUG_SERIAL.print("\"");
+          DEBUG_SERIAL.print(n);
+          DEBUG_SERIAL.print("\":[");
+          if (DXL_DIR_PIN != p) { //don't mess with the servo pins
+            DEBUG_SERIAL.print(digitalRead(n)); //just that one pin
+            if (ANALOG_PINS > n) { //if there is an analog channel
+              DEBUG_SERIAL.print(",");
+              DEBUG_SERIAL.print(analogRead(p)); //also return it
+              }
             }
-         }
+          else {
+            DEBUG_SERIAL.print(dxl.getPresentPosition(SERVO_ID, UNIT_DEGREE));
+            DEBUG_SERIAL.print(",");
+            DEBUG_SERIAL.print(dxl.getPresentCurrent(SERVO_ID, UNIT_PERCENT));
+            DEBUG_SERIAL.print(",");
+            DEBUG_SERIAL.print(dxl.getPresentVelocity(SERVO_ID, UNIT_RPM));
+            }
+          }
         DEBUG_SERIAL.println("]}");
         break;
       case '-': 
@@ -284,12 +311,23 @@ void loop(){
       case 'D': //delay n ms per instruction
         d=n;
         break;
-      case 'S': //PWM speed 5 allows servos, 4 is default.
-        if (dxl.setGoalPosition(SERVO_ID, n, UNIT_DEGREE)){
+      case 'S': //Send #,# as torque % and position in degrees. e.g. 50,90S 100000D 45S
+        if (dxl.setGoalCurrent(SERVO_ID, p, UNIT_PERCENT)) {
+          DEBUG_SERIAL.print("[{\"ServoTorque\": ");
+          DEBUG_SERIAL.print(p);
+          DEBUG_SERIAL.println("}]");
+          }
+        else { //can't move!
+          DEBUG_SERIAL.println("[{\"Error:\" \"ServoTorque\"}]");
+          }
+        if (dxl.setGoalPosition(SERVO_ID, n, UNIT_DEGREE)) {
           DEBUG_SERIAL.print("[{\"ServoGoal\": ");
           DEBUG_SERIAL.print(n);
           DEBUG_SERIAL.println("}]");
-        }
+          }
+        else { //can't move!
+          DEBUG_SERIAL.println("[{\"Error:\" \"ServoPosition\"}]");
+          }
         break;
       case '\n': 
       case '\r':
