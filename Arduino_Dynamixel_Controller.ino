@@ -12,7 +12,6 @@ Arduino_Dynamixel_Controller.ino
  on the DYNAMIXELShield UART RX/TX connector.
 //20200203 James Newton / Tyler Skelton updated to support readback of servo position, torque, and 
  velocity and to set max "current" (torque(ish)) when moving. 
-
 Simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
 clock out data with timing, and read all or a single pin back via serial IO. 
 Written for the tiny-circuits.com TinyDuino in the end effector of the 
@@ -21,7 +20,6 @@ into a tool for generating test signals, and reading back results. Not as
 powerful as the busPirate, but more flexible in some ways and much easier to
 operate. Not a replacement for Firmata as this is intended to be used by a 
 human directly via serial monitor or terminal, not from a program.
-
 Commands:
 #?   //return binary value of digital pin, and value for analog input if exists
      //if # and default # (set by comma command, see below) are zero or ommitted  
@@ -48,7 +46,6 @@ _-   //low high clocked puts out the set of low and high signals shown on # with
      
 Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
 are all ignored. If no n is specified, value previously saved by , is used.
-
 Examples:
 ?
 //returns something like: {"?":["10010000001111",739,625,569,525,493,470]}
@@ -312,7 +309,7 @@ void loop(){
         d=n;
         break;
       case 'S': //Send #,# as torque % and position in degrees. e.g. 50,90S 100000D 45S
-        if (dxl.setGoalCurrent(SERVO_ID, p, UNIT_PERCENT)) {
+        if (dxl.setGoalPWM(SERVO_ID, p, UNIT_PERCENT)) {
           DEBUG_SERIAL.print("[{\"ServoTorque\": ");
           DEBUG_SERIAL.print(p);
           DEBUG_SERIAL.println("}]");
