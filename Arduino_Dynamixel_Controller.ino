@@ -243,7 +243,7 @@ void loop(){
           DEBUG_SERIAL.print("\"");
           DEBUG_SERIAL.print(n);
           DEBUG_SERIAL.print("\":[");
-          if (DXL_DIR_PIN != p) { //don't mess with the servo pins
+          if (DXL_DIR_PIN != n) { //don't mess with the servo pins
             DEBUG_SERIAL.print(digitalRead(n)); //just that one pin
             if (ANALOG_PINS > n) { //if there is an analog channel
               DEBUG_SERIAL.print(",");
