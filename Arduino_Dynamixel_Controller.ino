@@ -235,7 +235,7 @@ void loop(){
           DEBUG_SERIAL.print(",");
           DEBUG_SERIAL.print(dxl.getPresentPosition(SERVO_ID, UNIT_DEGREE));
           DEBUG_SERIAL.print(",");
-          DEBUG_SERIAL.print(dxl.getPresentCurrent(SERVO_ID, UNIT_PERCENT));
+          DEBUG_SERIAL.print(dxl.getPresentPWM(SERVO_ID, UNIT_PERCENT));
           DEBUG_SERIAL.print(",");
           DEBUG_SERIAL.print(dxl.getPresentVelocity(SERVO_ID, UNIT_RPM));
           }
@@ -253,7 +253,7 @@ void loop(){
           else {
             DEBUG_SERIAL.print(dxl.getPresentPosition(SERVO_ID, UNIT_DEGREE));
             DEBUG_SERIAL.print(",");
-            DEBUG_SERIAL.print(dxl.getPresentCurrent(SERVO_ID, UNIT_PERCENT));
+            DEBUG_SERIAL.print(dxl.getPresentPWM(SERVO_ID, UNIT_PERCENT));
             DEBUG_SERIAL.print(",");
             DEBUG_SERIAL.print(dxl.getPresentVelocity(SERVO_ID, UNIT_RPM));
             }
