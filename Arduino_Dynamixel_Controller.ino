@@ -32,8 +32,10 @@ Commands:
 #,   //comma. Saves # as the default for all commands e.g. 3,HLHLHLI
 #,#A //set pin # to an analog output with value. Only PWM outputs will respond.
      // use with comma command e.g. 5,120A will put 120 on pin 5
-#,#S //Servo angle. Send percent of max torque, then position, to set torque and position. 
-     // e.g. 50,90S moves at half strength to 90 degrees. 
+#,#R //Reboot / Initialize servo into mode. <id>,<mode>R. 
+     // e.g. 1,4R starts servo id 1 in extended position mode
+#,#S //Servo position. <id>,<degrees>S e.g. 2,90S moves servo id 2 to 90 degrees. 
+#,#T //Torque setting. <id>,<percent>T e.g. 1,50T sets servo id 1 to half strength.
 _-   //low high clocked puts out the set of low and high signals shown on # with
      // a clock on #, e.g. 5,11-__-_--_ clocks out 10010110 on pin 11, with clock 
      // pulses on pin 5. Clock is currently falling edge only. 
@@ -61,8 +63,6 @@ Examples:
 //this also saves pin 5 as the default pin for all commands from now on
 240A
 //(nothing returned) assuming prior command was 5,120A put 240 out pin 5 as new analog value
-100,90S
-//(nothing returned) move the attached Dynamixel servo to 90 degrees at full strength.
 ?
 //assuming 5, has been recieved before, returns just the value of pin 5 and analog 5
 0,
@@ -78,6 +78,9 @@ Examples:
 //53D would work. Take the uS delay you want and subtract 47.
 //With larger delays, the error is consistant but has relativly less effect.
 // Note that the CYCLE_DELAY is not used as long as new characters are available.
+1,4R50T90S
+//Assuming an attached Dynamixel servo with an ID of 1, reset it to extended position mode, half
+// strength, and move to 90 degrees. 
 */
 
 #include <Dynamixel2Arduino.h>
@@ -183,19 +186,25 @@ void delayus(unsigned long us) {
   delayMicroseconds(us);
   }
 
-void rebootServo() {
-    dxl.torqueOff(SERVO_ID);
+void rebootServo(int id, int mode) { //setup servo id number into mode.
+  dxl.torqueOff(id);
   //dxl.writeControlTableItem(11, SERVO_ID, 4); //Set extended position/multi-turn mode, 11 = OPERATING_MODE
-  if (dxl.setOperatingMode(SERVO_ID, SERVO_MODE)){
-    DEBUG_SERIAL.println("[{\"ServoMode\": \"Set\"}]");
+  if (!mode) mode = SERVO_MODE;
+  if (dxl.setOperatingMode(id, mode)){
+    DEBUG_SERIAL.print("[{\"Servo\": ");
+    DEBUG_SERIAL.print(id);
+    DEBUG_SERIAL.print(", \"Mode\": ");
+    DEBUG_SERIAL.print(mode);
+    DEBUG_SERIAL.println("}]");
     }
-  if (dxl.writeControlTableItem(PROFILE_VELOCITY, SERVO_ID, 0)){ //0 is no velocity limit
-    DEBUG_SERIAL.println("[{\"ServoVelocity\": \"MAX\"}]");
-    }
-  else { //can't set max velocity!
-    DEBUG_SERIAL.println("[{\"Error:\" \"ServoVelocity\"}]");
-    }
-  if (dxl.torqueOn(SERVO_ID)){
+// This errors every time. See issue on repo for library.
+//  if (dxl.writeControlTableItem(PROFILE_VELOCITY, id, 0)){ //0 is no velocity limit
+//    DEBUG_SERIAL.println("[{\"ServoVelocity\": \"MAX\"}]");
+//    }
+//  else { //can't set max velocity!
+//    DEBUG_SERIAL.println("[{\"Error:\" \"ServoVelocity\"}]");
+//    }
+  if (dxl.torqueOn(id)){
     DEBUG_SERIAL.println("[{\"ServoTorque\": \"On\"}]");
     }
   }
@@ -206,7 +215,7 @@ void setup() {
   DEBUG_SERIAL.println("[{\"Ready\": \"true\"}]");
   dxl.setPortProtocolVersion(2.0);
   dxl.begin(BAUD);
-  rebootServo();
+  //rebootServo();
   n=0; //number
   p=0; //pin number
   d=2; //delay. Default is 2uS or 250KHz
@@ -242,14 +251,14 @@ void loop(){
               DEBUG_SERIAL.print(analogRead(p));
               }
             }
-          DEBUG_SERIAL.print(",");
+          DEBUG_SERIAL.print(","); //add in data about the first servo.
           DEBUG_SERIAL.print(dxl.getPresentPosition(SERVO_ID, UNIT_DEGREE));
           DEBUG_SERIAL.print(",");
           DEBUG_SERIAL.print(dxl.getPresentPWM(SERVO_ID, UNIT_PERCENT));
           DEBUG_SERIAL.print(",");
           DEBUG_SERIAL.print(dxl.getPresentVelocity(SERVO_ID, UNIT_RPM));
           }
-        else {
+        else { //specific pin
           DEBUG_SERIAL.print("\"");
           DEBUG_SERIAL.print(n);
           DEBUG_SERIAL.print("\":[");
@@ -260,12 +269,12 @@ void loop(){
               DEBUG_SERIAL.print(analogRead(p)); //also return it
               }
             }
-          else {
-            DEBUG_SERIAL.print(dxl.getPresentPosition(SERVO_ID, UNIT_DEGREE));
+          else { //servo data
+            DEBUG_SERIAL.print(dxl.getPresentPosition(p, UNIT_DEGREE));
             DEBUG_SERIAL.print(",");
-            DEBUG_SERIAL.print(dxl.getPresentPWM(SERVO_ID, UNIT_PERCENT));
+            DEBUG_SERIAL.print(dxl.getPresentPWM(p, UNIT_PERCENT));
             DEBUG_SERIAL.print(",");
-            DEBUG_SERIAL.print(dxl.getPresentVelocity(SERVO_ID, UNIT_RPM));
+            DEBUG_SERIAL.print(dxl.getPresentVelocity(p, UNIT_RPM));
             }
           }
         DEBUG_SERIAL.println("]}");
@@ -318,23 +327,31 @@ void loop(){
       case 'D': //delay n ms per instruction
         d=n;
         break;
-      case 'S': //Send #,# as torque % and position in degrees. e.g. 50,90S 100000D 45S
-        if (!p && !n) { rebootServo(); break; } //0,0S reboots servo. 
-        if (dxl.setGoalPWM(SERVO_ID, p, UNIT_PERCENT)) {
-          DEBUG_SERIAL.print("[{\"ServoTorque\": ");
+      case 'R': //<id>,<mode>S reboots servo.
+        rebootServo(p,n); 
+        break; 
+      case 'S': //<id>,<degrees> sets goal position. e.g. 1,90S 100000D 45S
+        if (dxl.setGoalPosition(p, n, UNIT_DEGREE)) {
+          DEBUG_SERIAL.print("[{\"Servo\": ");
           DEBUG_SERIAL.print(p);
-          DEBUG_SERIAL.println("}]");
-          }
-        else { //can't move!
-          DEBUG_SERIAL.println("[{\"Error:\" \"ServoTorque\"}]");
-          }
-        if (dxl.setGoalPosition(SERVO_ID, n, UNIT_DEGREE)) {
-          DEBUG_SERIAL.print("[{\"ServoGoal\": ");
+          DEBUG_SERIAL.print(", \"Goal\": ");
           DEBUG_SERIAL.print(n);
           DEBUG_SERIAL.println("}]");
           }
         else { //can't move!
           DEBUG_SERIAL.println("[{\"Error:\" \"ServoPosition\"}]");
+          }
+        break;
+      case 'T': 
+        if (dxl.setGoalPWM(p, n, UNIT_PERCENT)) {
+          DEBUG_SERIAL.print("[{\"Servo\": ");
+          DEBUG_SERIAL.print(p);
+          DEBUG_SERIAL.print(", \"Torque\": ");
+          DEBUG_SERIAL.print(n);
+          DEBUG_SERIAL.println("}]");
+          }
+        else { //can't set torque!
+          DEBUG_SERIAL.println("[{\"Error:\" \"ServoTorque\"}]");
           }
         break;
       case '\n': 
