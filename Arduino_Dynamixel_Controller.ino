@@ -183,24 +183,34 @@ void delayus(unsigned long us) {
   delayMicroseconds(us);
   }
 
+void rebootServo() {
+    dxl.torqueOff(SERVO_ID);
+  //dxl.writeControlTableItem(11, SERVO_ID, 4); //Set extended position/multi-turn mode, 11 = OPERATING_MODE
+  if (dxl.setOperatingMode(SERVO_ID, SERVO_MODE)){
+    DEBUG_SERIAL.println("[{\"ServoMode\": \"Set\"}]");
+    }
+  if (dxl.writeControlTableItem(PROFILE_VELOCITY, SERVO_ID, 0)){ //0 is no velocity limit
+    DEBUG_SERIAL.println("[{\"ServoVelocity\": \"MAX\"}]");
+    }
+  else { //can't set max velocity!
+    DEBUG_SERIAL.println("[{\"Error:\" \"ServoVelocity\"}]");
+    }
+  if (dxl.torqueOn(SERVO_ID)){
+    DEBUG_SERIAL.println("[{\"ServoTorque\": \"On\"}]");
+    }
+  }
+
 void setup() {
   DEBUG_SERIAL.begin(BAUD);
   while(!DEBUG_SERIAL); //Wait until the serial port is opened
   DEBUG_SERIAL.println("[{\"Ready\": \"true\"}]");
   dxl.setPortProtocolVersion(2.0);
   dxl.begin(BAUD);
-  dxl.torqueOff(SERVO_ID);
-  //dxl.writeControlTableItem(11, SERVO_ID, 4); //Set extended position/multi-turn mode, 11 = OPERATING_MODE
- if (dxl.setOperatingMode(SERVO_ID, SERVO_MODE)){
-  DEBUG_SERIAL.println("[{\"ServoMode\": \"Set\"}]");
- }
-  if (dxl.torqueOn(SERVO_ID)){
-    DEBUG_SERIAL.println("[{\"ServoTorque\": \"On\"}]");
-  }
+  rebootServo();
   n=0; //number
   p=0; //pin number
   d=2; //delay. Default is 2uS or 250KHz
- }
+  }
 
 void loop(){
   while (DEBUG_SERIAL.available() > 0) { //if data has arrived
