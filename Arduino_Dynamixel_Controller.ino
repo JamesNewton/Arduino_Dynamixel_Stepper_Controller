@@ -319,6 +319,7 @@ void loop(){
         d=n;
         break;
       case 'S': //Send #,# as torque % and position in degrees. e.g. 50,90S 100000D 45S
+        if (!p && !n) { rebootServo(); break; } //0,0S reboots servo. 
         if (dxl.setGoalPWM(SERVO_ID, p, UNIT_PERCENT)) {
           DEBUG_SERIAL.print("[{\"ServoTorque\": ");
           DEBUG_SERIAL.print(p);
