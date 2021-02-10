@@ -124,7 +124,7 @@ Examples:
 //https://emanual.robotis.com/docs/en/popup/arduino_api/setOperatingMode/
 
 Dynamixel2Arduino dxl(DXL_SERIAL, DXL_DIR_PIN);
-
+using namespace ControlTableItem;
 
 
 #define ANALOG_PINS 6
@@ -190,23 +190,22 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
   dxl.torqueOff(id);
   //dxl.writeControlTableItem(11, SERVO_ID, 4); //Set extended position/multi-turn mode, 11 = OPERATING_MODE
   if (!mode) mode = SERVO_MODE;
+  DEBUG_SERIAL.print("[{\"Servo\": ");
+  DEBUG_SERIAL.print(id);
   if (dxl.setOperatingMode(id, mode)){
-    DEBUG_SERIAL.print("[{\"Servo\": ");
-    DEBUG_SERIAL.print(id);
     DEBUG_SERIAL.print(", \"Mode\": ");
     DEBUG_SERIAL.print(mode);
-    DEBUG_SERIAL.println("}]");
     }
-// This errors every time. See issue on repo for library.
-//  if (dxl.writeControlTableItem(PROFILE_VELOCITY, id, 0)){ //0 is no velocity limit
-//    DEBUG_SERIAL.println("[{\"ServoVelocity\": \"MAX\"}]");
-//    }
-//  else { //can't set max velocity!
-//    DEBUG_SERIAL.println("[{\"Error:\" \"ServoVelocity\"}]");
-//    }
+  if (dxl.writeControlTableItem(PROFILE_VELOCITY, id, 0)){ //0 is no velocity limit
+    DEBUG_SERIAL.print(", \"Velocity\": \"MAX\"");
+    }
+  else { //can't set max velocity!
+    DEBUG_SERIAL.print(", \"Velocity\": \"ERR\"");
+    }
   if (dxl.torqueOn(id)){
-    DEBUG_SERIAL.println("[{\"ServoTorque\": \"On\"}]");
+    DEBUG_SERIAL.println(", \"Torque\": \"On\"");
     }
+  DEBUG_SERIAL.println("}]");
   }
 
 void setup() {
