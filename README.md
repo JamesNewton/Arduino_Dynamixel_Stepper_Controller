@@ -87,7 +87,7 @@ qty | item | price | source
 ----|------|-------|---------------
 1   | Arduino | ~$25 | Arduino.cc (please support Arduino by buying real parts instead of cheap crappy knockoffs?)
 1   | Shield  | $20  | http://en.robotis.com/shop_en/item.php?it_id=902-0146-000
-1   | TTL Serial USB adapter | ~$2 | Google CP2102 or e.g.<BR> https://www.amazon.com/Diymore-Converter-Support-Windows-Arduino/dp/B0776T51YT/ref=sr_1_9
+1   | TTL Serial USB adapter | ~$2 | Google CP2102 or e.g.<BR> https://www.amazon.com/Diymore-Converter-Support-Windows-Arduino/dp/B0776T51YT/ref=sr_1_9 <BR> https://www.amazon.com/ADAFRUIT-Industries-954-Serial-Raspberry/dp/B00DJUHGHI/ref=sr_1_35 with cable built in.
 1   | 12V adapter | ~$9 | Google AC/DC power adapter. e.g. <BR> https://www.amazon.com/Converter-Cigarette-Lighter-110-240V-Adapter/dp/B07DWXRD5F/ref=sr_1_4
 1   | 4 pin JST cable | $? | Commonly available from hobby stores, online, etc... 
 
