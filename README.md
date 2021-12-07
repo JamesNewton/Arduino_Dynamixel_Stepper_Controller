@@ -23,20 +23,20 @@ All commands are in the format [#,][#]L where [#,] is an optional saved number, 
 Op   | Description
 ---- | ---
 `#?` | Return binary value of digital pin, and value for analog input if supported by the pin. If # and default # (set by comma command, see below) are zero or ommitted, ? returns all pins and analog values at once. e.g. `1?` might return `{"1":[1,459]} ` indicating the pin is digital high, and analog 459 counts. Because pin 2 is used by the servo system, `2?` returns servo data. Specify the servo id with `#,` e.g. `3,2?` returns position, torque, and velocity for servo ID 3.
-`#I` | Set pin # to an input. e.g. `3I`
-`#P` | Set pin # to an input with internal pullup.  e.g. `4P`
-`#H` | Set pin # to a high output.  e.g. `3H4H`
-`#L` | Set pin # to a low output.  e.g. `5L4L3L`
+`#I` | Set [pin](#pins) # to an input. e.g. `3I`
+`#P` | Set [pin](#pins) # to an input with internal pullup.  e.g. `4P`
+`#H` | Set [pin](#pins) # to a high output.  e.g. `3H4H`
+`#L` | Set [pin](#pins) # to a low output.  e.g. `5L4L3L`
 `#D` | Delay # microseconds between each command, with a minimum of about 47uS
 `#,` | Comma. Saves pin # as the default pin for all commands e.g. `3,HLHLHL` 
-`#,#A` | Set pin # to an analog output with value. Only PWM outputs will respond. Use with comma command e.g. 5,120A will put 120 on pin 5
+`#,#A` | Set [pin](#pins) # to an analog output with value. Only PWM outputs will respond. Use with comma command e.g. 5,120A will put 120 on pin 5
 `#,#R` | Reboot / Initialize servo into mode. `<id>,<mode>R`. e.g. `1,4R` starts servo id 1 in extended position mode
 `#,#S` | Servo position. `<id>,<degrees>S` e.g. `2,90S` moves servo id 2 to 90 degrees. 
 `#,#T` | Torque setting. `<id>,<percent>T` e.g. `1,50T` sets servo id 1 to half strength.
 `_-` | "low high clocked" Puts out a set of low and high signals on `#` with a clock on `#,` e.g. `5,11-__-_--_` clocks out 10010110 on pin 11, with clock pulses on pin 5. Clock is currently falling edge only. `5,11-` is basically `5L11H5H5L11L`
 `.`  | "in clock" Reads data back from `#` while clocking `#,` e.g. `5L 11H 5,11-__-_--_. .........` clocks out 10010110, gets the ack, and then 8 bits of data and a final ack.
 `(`  | I2C start with `#` as SDA and `#,` as SCL
-`)`  | I2C stop with `#` as SDA and `#,` as SCL. Pins left floating pulled up. e.g. `5,11(-__-_--_. .........)` starts, 10010110, gets ack, data, ack, stop
+`)`  | I2C stop with `#` as SDA and `#,` as SCL. [Pins](#pins) left floating pulled up. e.g. `5,11(-__-_--_. .........)` starts, 10010110, gets ack, data, ack, stop
 
 Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
 are all ignored. If no n is specified, value previously saved by , is used.
@@ -134,5 +134,9 @@ T | RX
 
 
 <img src="https://user-images.githubusercontent.com/419392/89340621-de190500-d654-11ea-8f35-cad97d78e372.png">
+
+  
+### Pins 
+Note that the Dynamixel shield uses pins 0, 1, 2, 7, and 8. Normally, an Arduino will communicate with the PC on pins 0 and 1, but those are used to talk to the servoes, so 7 and 8 are used for communications with the PC via the USB adapter instead. The built in USB adapter on the Arduino is only used for uploading the sketch and is then rendered useless. Pin 2 is also used by the shield. All the other pins available on the Arduino are unused and available for your applications. 
 
 <img src="https://emanual.robotis.com/assets/images/parts/interface/dynamixel_shield/pinmap.png">
