@@ -1,20 +1,19 @@
 # Arduino Dynamixel Controller
 USB adapter to Arduino with Dynamixel Shield provides simple digital IO and motion. 
 
+It is a simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
+clock out data with timing, and read all or a single pin back via serial IO. 
+
+Generally useful to turn the Arduino into a tool for generating test signals, and reading back results. 
+- Not as powerful as the busPirate or LabNation SmartScope, but more flexible in some ways and much easier to operate. And it runs a Servo or Stepper in useful ways (e.g. with acceleration and max velocity).
+- Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a Pi or other high level robot controller. And it does not provide high level drivers for a fixed set of devices. It is more useful as means of developing drivers. 
+
 This is a "kitbash" of this gist:
 https://gist.github.com/JamesNewton/8b994528ff3ce69e60bbb67c40954cd2
 with some firmware changes to support the Dynamixel servo via the hardware in this repo:
 https://github.com/JamesNewton/Dynamixel-Shield-Setup
 
-Note: It does NOT communicate via the Arduino USB adapter during normal operation, it uses an external USB / TTL serial adapter instead because the Dynamixel is on the main Arduino serial port. 
-
-
-Simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
-clock out data with timing, and read all or a single pin back via serial IO. 
-
-Generally useful to turn the Arduino into a tool for generating test signals, and reading back results. 
-- Not as powerful as the busPirate or LabNation SmartScope, but more flexible in some ways and much easier to operate. And it runs a Servo.
-- Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a Pi or other high level robot controller. And it does not provide high level drivers for a fixed set of devices. It is more useful as means of developing drivers. 
+Note: If SERVO_SUPPORT is enabled and the Dynamixel Shield is installed, then it does NOT communicate via the Arduino USB adapter during normal operation, it uses an external USB / TTL serial adapter instead because the Dynamixel is on the main Arduino serial port. If you don't need the servos, it will (probably) work with just the standard Arduino serial interface.
 
 ## Commands
 
@@ -30,13 +29,18 @@ Op   | Description
 `#D` | Delay # microseconds between each command, with a minimum of about 47uS
 `#,` | Comma. Saves pin # as the default pin for all commands e.g. `3,HLHLHL` 
 `#,#A` | Set [pin](#pins) # to an analog output with value. Only PWM outputs will respond. Use with comma command e.g. 5,120A will put 120 on pin 5
-`#,#R` | Reboot / Initialize servo into mode. `<id>,<mode>R`. e.g. `1,4R` starts servo id 1 in extended position mode
-`#,#S` | Servo position. `<id>,<degrees>S` e.g. `2,90S` moves servo id 2 to 90 degrees. 
-`#,#T` | Torque setting. `<id>,<percent>T` e.g. `1,50T` sets servo id 1 to half strength.
 `_-` | "low high clocked" Puts out a set of low and high signals on `#` with a clock on `#,` e.g. `5,11-__-_--_` clocks out 10010110 on pin 11, with clock pulses on pin 5. Clock is currently falling edge only. `5,11-` is basically `5L11H5H5L11L`
 `.`  | "in clock" Reads data back from `#` while clocking `#,` e.g. `5L 11H 5,11-__-_--_. .........` clocks out 10010110, gets the ack, and then 8 bits of data and a final ack.
 `(`  | I2C start with `#` as SDA and `#,` as SCL
 `)`  | I2C stop with `#` as SDA and `#,` as SCL. [Pins](#pins) left floating pulled up. e.g. `5,11(-__-_--_. .........)` starts, 10010110, gets ack, data, ack, stop
+&nbsp; | If SERVO_SUPPORT is enabled and the Dynamixel Shield is installed:
+`#,#R` | Reboot / Initialize servo into mode. `<id>,<mode>R`. e.g. `1,4R` starts servo id 1 in extended position mode
+`#,#S` | Servo position. `<id>,<degrees>S` e.g. `2,90S` moves servo id 2 to 90 degrees. 
+`#,#T` | Torque setting. `<id>,<percent>T` e.g. `1,50T` sets servo id 1 to half strength.
+&nbsp; | if STEPPER_SUPPORT is enabled
+`#,#M` | stepper Motor setup. `<step_pin>,<dir_pin>M`. Defaults to pins 3 and 4.
+`#,#V` | motion profile for the stepper. `<accelleration>, <velocity limit>V` in steps per unit time. Defaults to 240 and 480
+`#G`   | Goto. Move the stepper motor to the specified position in step units.
 
 Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
 are all ignored. If no n is specified, value previously saved by , is used.
