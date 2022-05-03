@@ -11,15 +11,23 @@ Arduino_Dynamixel_Controller.ino
  Note this changes the command serial port and requires a seperate USB/Serial adapter 
  on the DYNAMIXELShield UART RX/TX connector.
 //20200203 James Newton / Tyler Skelton updated to support readback of servo position, torque, and 
- velocity and to set max "current" (torque(ish)) when moving. 
-Simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
-clock out data with timing, and read all or a single pin back via serial IO. 
-Written for the tiny-circuits.com TinyDuino in the end effector of the 
-Dexter robot from HDRobotic.com, but generally useful to turn the Arduino
-into a tool for generating test signals, and reading back results. Not as 
-powerful as the busPirate, but more flexible in some ways and much easier to
-operate. Not a replacement for Firmata as this is intended to be used by a 
-human directly via serial monitor or terminal, not from a program.
+ velocity and to set max "current" (torque(ish)) when moving.
+//20211220 James Newton, add support for a step / direction stepper driver with velocity and accel. See
+https://www.airspayce.com/mikem/arduino/AccelStepper/index.html for details. Install library via 
+"Sketch" / "Include Libraries" / "Manage Libraries" and then search for "AccelStep". Select and then "Install"
+//20211220 James Newton Clean up code and allow options to NOT support Dynamixel or Steppers via the defines
+
+A simple Arduino script to set pins high, low, input, pull up, or drive analog / rc servo, 
+Dynamixel servo, step / direction type stepper motor driver, clock out data with timing,
+and read all or a single pin back... all via serial IO. 
+
+Makes the Arduino: 
+- a tool for generating test signals, and reading back results. 
+Not as powerful as the busPirate, but more flexible in some ways and much easier to operate. 
+- a generic IO controller which doesn't need a new program for each application.
+Not a replacement for Firmata as this is intended to be used by a human directly 
+via serial monitor or terminal, not from a program.
+
 Commands:
 #?   //return binary value of digital pin, and value for analog input if exists
      //if # and default # (set by comma command, see below) are zero or ommitted  
@@ -36,6 +44,9 @@ Commands:
      // e.g. 1,4R starts servo id 1 in extended position mode
 #,#S //Servo position. <id>,<degrees>S e.g. 2,90S moves servo id 2 to 90 degrees. 
 #,#T //Torque setting. <id>,<percent>T e.g. 1,50T sets servo id 1 to half strength.
+#,#M //stepper Motor. <step_pin>,<dir_pin>M 
+#,#V //motion profile for the stepper. <accelleration>, <velocity limit>V
+#G   //goto. Move the stepper motor to the specified position.
 _-   //low high clocked puts out the set of low and high signals shown on # with
      // a clock on #, e.g. 5,11-__-_--_ clocks out 10010110 on pin 11, with clock 
      // pulses on pin 5. Clock is currently falling edge only. 
@@ -83,6 +94,13 @@ Examples:
 // strength, and move to 90 degrees. 
 */
 
+#define BAUD 115200
+#define DYNAMIXEL_SUPPORT
+//Note: If enabled, the Dynamixel Arduino shield is required and the standard Arduino UNO serial port is NOT functional! 
+//You must install the USB to Serial interface on the Dynamixel Shield and use that for communication. RTFM
+#define STEPPER_SUPPORT
+
+#ifdef DYNAMIXEL_SUPPORT
 #include <Dynamixel2Arduino.h>
 
 // Please modify it to suit your hardware.
@@ -116,22 +134,63 @@ Examples:
   const uint8_t DXL_DIR_PIN = 2; // DYNAMIXEL Shield DIR PIN
 #endif
 
-#define BAUD 57600
-
 #define SERVO_ID 1
 
 #define SERVO_MODE OP_EXTENDED_POSITION
 //https://emanual.robotis.com/docs/en/popup/arduino_api/setOperatingMode/
 
 Dynamixel2Arduino dxl(DXL_SERIAL, DXL_DIR_PIN);
+int servo_id;
 using namespace ControlTableItem;
+#else
+#define DXL_DIR_PIN -1
+#define DEBUG_SERIAL Serial
+#endif
 
+#ifdef STEPPER_SUPPORT
+#include <MultiStepper.h>
+#include <AccelStepper.h>
+//the default pins are used if you just start with an M oplet. Or 0,0M
+#define DEFAULT_STEP_PIN 3
+#define DEFAULT_DIR_PIN 4
+/* Good starting values for different modes
+ * Vel  Accel Microstep mode
+ *  30   15   Full
+ *  60   30   Half
+ * 120   60   Quarter
+ * 240  120   Eighth
+ * 480  240   Sixteenth
+ */
+#define DEFAULT_VELOCITY 480
+#define DEFAULT_ACCEL 240 
+#define DEFAULT_STEP_DELAY_US 1
+
+int dir_pin,step_pin;
+
+void step(){ //TODO Allow for stepper drivers with a negative going step signal. Are there any?
+    digitalWrite(step_pin, HIGH); // step HIGH
+    delayMicroseconds(DEFAULT_STEP_DELAY_US);    // Delay the minimum allowed pulse width
+    digitalWrite(step_pin, LOW); // step LOW
+}
+
+void step_forward() {
+    digitalWrite(dir_pin, HIGH); // Set direction first else get rogue pulses
+    step();
+}
+
+void step_back() {
+    digitalWrite(dir_pin, LOW); // Set direction first else get rogue pulses
+    step();
+}
+
+//AccelStepper stepper(AccelStepper::DRIVER, DEFAULT_STEP_PIN, DEFAULT_DIR_PIN); 
+//Instead, use the version with the two functions, so we can control the pins.
+//https://www.airspayce.com/mikem/arduino/AccelStepper/classAccelStepper.html#afa3061ce813303a8f2fa206ee8d012bd
+AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
+#endif
 
 #define ANALOG_PINS 6
 #define DIGITAL_PINS 14
-//#define BAUD_RATE 57600
-//might not work at 115200
-#define BAUD_RATE 115200
 #define CYCLE_DELAY 100
 
 unsigned long n,p,d;
@@ -186,9 +245,9 @@ void delayus(unsigned long us) {
   delayMicroseconds(us);
   }
 
+#ifdef DYNAMIXEL_SUPPORT
 void rebootServo(int id, int mode) { //setup servo id number into mode.
   dxl.torqueOff(id);
-  //dxl.writeControlTableItem(11, SERVO_ID, 4); //Set extended position/multi-turn mode, 11 = OPERATING_MODE
   if (!mode) mode = SERVO_MODE;
   DEBUG_SERIAL.print("[{\"Servo\": ");
   DEBUG_SERIAL.print(id);
@@ -207,17 +266,26 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
     }
   DEBUG_SERIAL.println("}]");
   }
+#endif
 
 void setup() {
   DEBUG_SERIAL.begin(BAUD);
   while(!DEBUG_SERIAL); //Wait until the serial port is opened
   DEBUG_SERIAL.println("[{\"Ready\": \"true\"}]");
+#ifdef DYNAMIXEL_SUPPORT
+  servo_id = SERVO_ID;
   dxl.setPortProtocolVersion(2.0);
   dxl.begin(BAUD);
   //rebootServo();
+#endif
   n=0; //number
   p=0; //pin number
   d=2; //delay. Default is 2uS or 250KHz
+#ifdef STEPPER_SUPPORT
+  stepper.setAcceleration(DEFAULT_ACCEL);stepper.setMaxSpeed(DEFAULT_VELOCITY);
+  dir_pin = DEFAULT_DIR_PIN;
+  step_pin = DEFAULT_STEP_PIN;
+#endif
   }
 
 void loop(){
@@ -250,12 +318,14 @@ void loop(){
               DEBUG_SERIAL.print(analogRead(p));
               }
             }
+#ifdef DYNAMIXEL_SUPPORT
           DEBUG_SERIAL.print(","); //add in data about the first servo.
-          DEBUG_SERIAL.print(dxl.getPresentPosition(SERVO_ID, UNIT_DEGREE));
+          DEBUG_SERIAL.print(dxl.getPresentPosition(servo_id, UNIT_DEGREE));
           DEBUG_SERIAL.print(",");
-          DEBUG_SERIAL.print(dxl.getPresentPWM(SERVO_ID, UNIT_PERCENT));
+          DEBUG_SERIAL.print(dxl.getPresentPWM(servo_id, UNIT_PERCENT));
           DEBUG_SERIAL.print(",");
-          DEBUG_SERIAL.print(dxl.getPresentVelocity(SERVO_ID, UNIT_RPM));
+          DEBUG_SERIAL.print(dxl.getPresentVelocity(servo_id, UNIT_RPM));
+#endif
           }
         else { //specific pin
           DEBUG_SERIAL.print("\"");
@@ -268,6 +338,7 @@ void loop(){
               DEBUG_SERIAL.print(analogRead(p)); //also return it
               }
             }
+#ifdef DYNAMIXEL_SUPPORT
           else { //servo data
             DEBUG_SERIAL.print(dxl.getPresentPosition(p, UNIT_DEGREE));
             DEBUG_SERIAL.print(",");
@@ -275,6 +346,7 @@ void loop(){
             DEBUG_SERIAL.print(",");
             DEBUG_SERIAL.print(dxl.getPresentVelocity(p, UNIT_RPM));
             }
+#endif
           }
         DEBUG_SERIAL.println("]}");
         break;
@@ -326,7 +398,43 @@ void loop(){
       case 'D': //delay n ms per instruction
         d=n;
         break;
+#ifdef STEPPER_SUPPORT
+      case 'M': //<step>,<dir>M step, direction Motor stepper
+        if (p) step_pin = p;
+        if (n) dir_pin = n;
+        DEBUG_SERIAL.print("[{\"Step\": ");
+        DEBUG_SERIAL.print(step_pin);
+        DEBUG_SERIAL.print(", \"Dir\": ");
+        DEBUG_SERIAL.print(dir_pin);
+        DEBUG_SERIAL.println("}]");
+        pinMode(step_pin, OUTPUT);digitalWrite(step_pin, LOW);
+        pinMode(dir_pin, OUTPUT);digitalWrite(dir_pin, LOW);
+        p = n = 0;
+        //break; //fall through and set default accel and velocity
+      case 'V': //<acceleration>, <velocity>V Set acceleration and velocity
+                //,<velocity>V Set default acceleration and velocity
+        if (!p) p = DEFAULT_ACCEL;
+        if (!n) n = DEFAULT_VELOCITY;
+        stepper.setAcceleration(p + 1);stepper.setMaxSpeed(n);
+        DEBUG_SERIAL.print("[{\"Accelleration\": ");
+        DEBUG_SERIAL.print(p+1);
+        DEBUG_SERIAL.print(", \"Velocity\": ");
+        DEBUG_SERIAL.print(n);
+        DEBUG_SERIAL.println("}]");
+        break;
+      case 'G': //<position>G  position Goto 
+        stepper.moveTo(n);
+        DEBUG_SERIAL.print("[{\"Goto\": ");
+        DEBUG_SERIAL.print(n);
+        DEBUG_SERIAL.println("}]");
+        break;
+/*
+#E  pin Endstop. Input with Pullup. Run motor ccw until pin goes low. stepper.setMaxSpeed(SLOW_SPEED); stepper.moveTo(-MAX_LONG); if (!digitalRead(n)) stepper.stop();
+ */
+#endif
+#ifdef DYNAMIXEL_SUPPORT
       case 'R': //<id>,<mode>S reboots servo.
+        servo_id = p;
         rebootServo(p,n); 
         break; 
       case 'S': //<id>,<degrees> sets goal position. e.g. 1,90S 100000D 45S
@@ -353,6 +461,7 @@ void loop(){
           DEBUG_SERIAL.println("[{\"Error:\" \"ServoTorque\"}]");
           }
         break;
+#endif
       case '\n': 
       case '\r':
         n=0; cmd=0; //clear command and value at end of line.
@@ -379,5 +488,9 @@ void loop(){
     //p is NOT cleared, so you can keep sending new commands only
     cmd=0; //done with command.
     }
-  delayus(CYCLE_DELAY);
+#ifdef STEPPER_SUPPORT
+  stepper.run(); //run full speed to support stepping.
+#else
+  delayus(CYCLE_DELAY); //save a little energy if we don't have characters. 
+#endif
   }
