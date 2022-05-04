@@ -40,13 +40,6 @@ Commands:
 #,   //comma. Saves # as the default for all commands e.g. 3,HLHLHLI
 #,#A //set pin # to an analog output with value. Only PWM outputs will respond.
      // use with comma command e.g. 5,120A will put 120 on pin 5
-#,#R //Reboot / Initialize servo into mode. <id>,<mode>R. 
-     // e.g. 1,4R starts servo id 1 in extended position mode
-#,#S //Servo position. <id>,<degrees>S e.g. 2,90S moves servo id 2 to 90 degrees. 
-#,#T //Torque setting. <id>,<percent>T e.g. 1,50T sets servo id 1 to half strength.
-#,#M //stepper Motor. <step_pin>,<dir_pin>M 
-#,#V //motion profile for the stepper. <accelleration>, <velocity limit>V
-#G   //goto. Move the stepper motor to the specified position.
 _-   //low high clocked puts out the set of low and high signals shown on # with
      // a clock on #, e.g. 5,11-__-_--_ clocks out 10010110 on pin 11, with clock 
      // pulses on pin 5. Clock is currently falling edge only. 
@@ -56,6 +49,13 @@ _-   //low high clocked puts out the set of low and high signals shown on # with
 (    //I2C start with # as SDA and #, as SCL
 )    //I2C stop with # as SDA and #, as SCL. Pins left floating pulled up.
      // e.g. 5,11(-__-_--_. .........) starts, 10010110, gets ack, data, ack, stop
+#,#R //Reboot / Initialize servo into mode. <id>,<mode>R. 
+     // e.g. 1,4R starts servo id 1 in extended position mode
+#,#S //Servo position. <id>,<degrees>S e.g. 2,90S moves servo id 2 to 90 degrees. 
+#,#T //Torque setting. <id>,<percent>T e.g. 1,50T sets servo id 1 to half strength.
+#,#M //stepper Motor. <step_pin>,<dir_pin>M 
+#,#V //motion profile for the stepper. <accelleration>, <velocity limit>V
+#G   //goto. Move the stepper motor to the specified position.
      
 Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
 are all ignored. If no n is specified, value previously saved by , is used.
