@@ -349,6 +349,10 @@ void loop(){
 #endif
           }
         DEBUG_SERIAL.println("]}");
+        DEBUG_SERIAL.write(04); //EOT
+//sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
+//https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
+        //DEBUG_SERIAL.print("\n"); //new line can help after EOT to tigger xmit on OS serial handler
         break;
       case '-': 
       case 'H': //set pin n output high
