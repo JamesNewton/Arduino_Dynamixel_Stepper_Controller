@@ -2,7 +2,7 @@
 USB adapter to Arduino with Dynamixel Shield or Stepper Shield / Driver provides simple digital IO and motion. 
 
 It is a simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
-clock out data with timing, and read all or a single pin back via serial IO. 
+clock out data with timing, and read all or a single pin back via serial IO. It also (optionally) supports Dynamixel Servos given a sheild and Stepper Motors given a standard step / direction driver. It's been tested with the [XC-430](https://emanual.robotis.com/docs/en/dxl/x/xc430-w150/), and [XL-320](https://emanual.robotis.com/docs/en/dxl/x/xl320/) servos. 
 
 Generally useful to turn the Arduino into a tool for generating test signals, and reading back results. 
 - Not as powerful as the busPirate or LabNation SmartScope, but more flexible in some ways and much easier to operate. And it runs a Servo or Stepper in useful ways (e.g. with acceleration and max velocity).
