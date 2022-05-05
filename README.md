@@ -1,4 +1,4 @@
-# Arduino Dynamixel Controller
+# Arduino Dynamixel / Stepper Controller
 USB adapter to Arduino with Dynamixel Shield or Stepper Shield / Driver provides simple digital IO and motion. 
 
 It is a simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
