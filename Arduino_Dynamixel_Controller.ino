@@ -193,7 +193,8 @@ AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 #define DIGITAL_PINS 14
 #define CYCLE_DELAY 100
 
-unsigned long n,p,d;
+long n,p,d, radix;
+int sign;
 char cmd;
 
 /*
@@ -281,6 +282,8 @@ void setup() {
   n=0; //number
   p=0; //pin number
   d=2; //delay. Default is 2uS or 250KHz
+  radix=10;
+  sign=1;
 #ifdef STEPPER_SUPPORT
   stepper.setAcceleration(DEFAULT_ACCEL);stepper.setMaxSpeed(DEFAULT_VELOCITY);
   dir_pin = DEFAULT_DIR_PIN;
@@ -292,13 +295,18 @@ void loop(){
   while (DEBUG_SERIAL.available() > 0) { //if data has arrived
     int c = DEBUG_SERIAL.read(); //get the data
     if ('0' <= c && c <= '9') { //if it's a digit
-      n = (c-'0') + n*10; //add it to n, shift n up 1 digit
+      n = (c-'0')*sign + n*radix; //add it to n, shift n up 1 digit
+      sign = 1; //in case it was negative
       continue; //and loop
       }
     cmd = char(c); //wasn't a number, must be a command
     if (' '==cmd || '\t'==cmd) { continue;} //whitespace does nothing
     if (','==cmd) { p=n; n=0; continue;} //save n to p, clear n, loop
-    if (0==n) {n=p; } //if we don't have a value, use the prevous pin number
+    if (0==n) {
+      if ('-'==cmd) {sign = -1; continue;} //if we don't have a number, it's a negative
+      n=p; //if we don't have a value, use the prevous pin number. 
+      //Note this means n can't be zero unless p is. 1,0 isn't possible, it becomes 1,1
+      } 
     switch (cmd) {
       case '?': //get information
         DEBUG_SERIAL.print("{"); //optional, just to signal start of data
