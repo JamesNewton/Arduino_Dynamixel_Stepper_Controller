@@ -189,8 +189,9 @@ void step_back() {
 AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 #endif
 
-#define ANALOG_PINS 6
-#define DIGITAL_PINS 14
+#define ANALOG_PINS NUM_ANALOG_INPUTS
+#define DIGITAL_PINS NUM_DIGITAL_PINS 
+//change above if you want ? to report fewer than actual pins.
 #define CYCLE_DELAY 100
 
 long n,p,d, radix;
