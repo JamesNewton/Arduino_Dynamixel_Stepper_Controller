@@ -128,14 +128,10 @@ T | RX
 7. Plug the shield onto the Arduino.
 
 ### OPERATE:
-1. Plug the TTL Serial adapter into your PC USB. You will need to configure a serial terminal program like PuTTY, or RealTerm, or whatever to 57600 N 8 1 (or whatever BAUD was set to in the code) on whatever port that shows up on. 
-2. Plug in a servo, and turn on the SW1 servo "POWER" switch. 
-3. Check that the SW2 "UART" switch is in "DYANMIXEL" vs "UPLOAD" (see top right of picture below, switch is toward top of picture)
-4. Turn on the AC adapter and verify that the Arduino power LED comes on. You should see `[{"Ready": "true"}]` on your terminal program.
-5. Check that the Servo LED blinks. (see bottom right of picture below, switch is toward top of picture)
-6. Enter e.g. `90S` and verify the servo moves to 90 degrees
-
-
+1. If you are using the Dynamixel Shield, check that the SW2 "UART" switch is in "DYANMIXEL" vs "UPLOAD" (see top right of picture below, switch is toward top of picture) and plug the TTL Serial adapter into your PC USB. Otherwise, (assuming you commented out the `#define SERVO_SUPPORT`) just plug in to the Arduino like always. In either case, you will need to configure a serial terminal program like Arduino Serial Monitor, PuTTY, or RealTerm, or whatever to 57600 N 8 1 (or whatever BAUD was set to in the code) on whatever port that shows up on.
+2. Turn on the AC adapter and verify that the Arduino power LED comes on. Press the reset switch on the Arduino. You should see `[{"Ready": "true"}]` on your terminal program. Send `?` to test communications and ensure you get back a response. Send a command to turn the LED on or off, e.g. `13H` and `13L` should be the pin on the Uno. 
+3. To use a Dynamixel, plug in a servo, and turn on the SW1 servo "POWER" switch. Check that the Servo LED blinks. (see bottom right of picture below, switch is toward top of picture). Reset the servo with it's id number and desired mode, e.g. `1,4R` and verify the servo blinks. Now enter e.g. `90S` and verify the servo moves to 90 degrees. 
+4. To use a stepper driver, (assuming you commented IN the `#define STEPPER_SUPPORT`) connect ground to ground, then connect the step line to one of the available pin, e.g. 10 and step to another, e.g. 11. Power on the stepper driver and motor, then send e.g. `10,11M` to initialze the system, and e.g. `240,1000V` to set speed and acceleration, then use e.g. `500G` and then `0G` to move the motor a bit. You will need to change the V settings to match your system. 
 
 <img src="https://user-images.githubusercontent.com/419392/89340621-de190500-d654-11ea-8f35-cad97d78e372.png">
 
