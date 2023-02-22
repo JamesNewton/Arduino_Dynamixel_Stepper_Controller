@@ -95,10 +95,12 @@ Examples:
 */
 
 #define BAUD 115200
-#define DYNAMIXEL_SUPPORT
+//#define DYNAMIXEL_SUPPORT
 //Note: If enabled, the Dynamixel Arduino shield is required and the standard Arduino UNO serial port is NOT functional! 
 //You must install the USB to Serial interface on the Dynamixel Shield and use that for communication. RTFM
 #define STEPPER_SUPPORT
+
+#include <EEPROM.h>
 
 #ifdef DYNAMIXEL_SUPPORT
 #include <Dynamixel2Arduino.h>
@@ -197,6 +199,11 @@ AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 long n,p,d, radix;
 int sign;
 char cmd;
+char op;
+bool quoting;
+#define REG_SIZE 26
+long reg[REG_SIZE];
+byte *mem; //will point into reg
 
 /*
 https://playground.arduino.cc/Code/PwmFrequency
@@ -285,6 +292,10 @@ void setup() {
   d=2; //delay. Default is 2uS or 250KHz
   radix=10;
   sign=1;
+  mem = reg[0];
+  EEPROM.get(0, reg['m'-'a']); //load up the count of memory used
+  op = 0;
+  quoting = false;
 #ifdef STEPPER_SUPPORT
   stepper.setAcceleration(DEFAULT_ACCEL);stepper.setMaxSpeed(DEFAULT_VELOCITY);
   dir_pin = DEFAULT_DIR_PIN;
@@ -295,12 +306,53 @@ void setup() {
 void loop(){
   while (DEBUG_SERIAL.available() > 0) { //if data has arrived
     int c = DEBUG_SERIAL.read(); //get the data
+    cmd = char(c); 
+    if ('\"'==cmd) { //quote
+      if (!quoting) { //this is a new quote
+        if (NUM_DIGITAL_PINS >= n || REG_SIZE+NUM_DIGITAL_PINS <= n) {DEBUG_SERIAL.print("reg?");continue;}
+        reg[n-NUM_DIGITAL_PINS]=reg['m'-'a']; //reg being defined points to mem at reg m
+        quoting = true;
+      } else { //end of a quote
+        EEPROM.put(0, reg['m'-'a']); //save the number of bytes we've used
+        quoting = false;
+      }
+      continue; //in either case, we are done here
+    }
+    if ('\n'==cmd || '\r'==cmd) { //EOL
+      if (NUM_DIGITAL_PINS < p && REG_SIZE+NUM_DIGITAL_PINS > p) { //p is a register
+        reg[p-NUM_DIGITAL_PINS]=n; //TODO check for an ':' op as well. actually do a switch here.
+        p=0; //for now
+      }
+      n=0; cmd=0;//clear command and value (but not p) at end of line.
+      d=0; //delay doesn't last past one line
+      quoting = false; //no multi-line quoting, for now... maybe later
+      continue; //loop now, no delay
+    }
+    if (quoting) { //if we are quoting, just put it away
+      DEBUG_SERIAL.print(reg['m'-'a']);
+      EEPROM.update(reg['m'-'a']++,cmd); //add the current address, then increment it
+      DEBUG_SERIAL.print(':');
+      DEBUG_SERIAL.println(cmd);
+      continue; //and do nothing more
+    }
+    if ('@'==cmd && n < EEPROM.length()) { //value AT address
+      n=EEPROM.read(n); //Get the value out of memory at that address
+      continue;
+      } 
+    if ('!'==cmd && p < EEPROM.length()) { //Write value to address
+      EEPROM.update(p,n); //put n into EEPROM at p
+      continue;
+      }
     if ('0' <= c && c <= '9') { //if it's a digit
       n = (c-'0')*sign + n*radix; //add it to n, shift n up 1 digit
       sign = 1; //in case it was negative
       continue; //and loop
       }
-    cmd = char(c); //wasn't a number, must be a command
+    if ('a' <= cmd && cmd <= 'z') { //if it's a variable
+      n = n + (c - 'a') + NUM_DIGITAL_PINS; //store the address
+      //note that n is folded in. e.g. 1a is b
+      continue; //and loop
+    }
     if (' '==cmd || '\t'==cmd) { continue;} //whitespace does nothing
     if (','==cmd) { p=n; n=0; continue;} //save n to p, clear n, loop
     if (0==n) {
@@ -336,15 +388,23 @@ void loop(){
           DEBUG_SERIAL.print(dxl.getPresentVelocity(servo_id, UNIT_RPM));
 #endif
           }
-        else { //specific pin
+        else { //specific pin or address
           DEBUG_SERIAL.print("\"");
           DEBUG_SERIAL.print(n);
           DEBUG_SERIAL.print("\":[");
           if (DXL_DIR_PIN != n) { //don't mess with the servo pins
-            DEBUG_SERIAL.print(digitalRead(n)); //just that one pin
+            int value = 0;
+            if (NUM_DIGITAL_PINS > n) { //it's a pin
+              value = digitalRead(n);
+            } else { //it's an address
+              if (REG_SIZE+NUM_DIGITAL_PINS < n) n = REG_SIZE+NUM_DIGITAL_PINS; 
+              value = reg[n-NUM_DIGITAL_PINS]; //to a register
+            }
+            DEBUG_SERIAL.print(value); //just that one value
             if (ANALOG_PINS > n) { //if there is an analog channel
+              value = analogRead(p); //use that instead.
               DEBUG_SERIAL.print(",");
-              DEBUG_SERIAL.print(analogRead(p)); //also return it
+              DEBUG_SERIAL.print(value); //also return it
               }
             }
 #ifdef DYNAMIXEL_SUPPORT
@@ -358,10 +418,10 @@ void loop(){
 #endif
           }
         DEBUG_SERIAL.println("]}");
-        DEBUG_SERIAL.write(04); //EOT
+        //DEBUG_SERIAL.write(04); //EOT
 //sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
 //https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
-        //DEBUG_SERIAL.print("\n"); //new line can help after EOT to tigger xmit on OS serial handler
+        DEBUG_SERIAL.print("\n"); //new line can help after EOT to tigger xmit on OS serial handler
         break;
       case '-': 
       case 'H': //set pin n output high
@@ -475,11 +535,7 @@ void loop(){
           }
         break;
 #endif
-      case '\n': 
-      case '\r':
-        n=0; cmd=0; //clear command and value at end of line.
-        continue; //loop now, no delay
-        break; //shouldn't get here
+
       default:
         DEBUG_SERIAL.print("\"");
         DEBUG_SERIAL.print(n);
