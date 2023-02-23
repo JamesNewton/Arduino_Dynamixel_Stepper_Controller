@@ -94,11 +94,22 @@ Examples:
 // strength, and move to 90 degrees. 
 */
 
-#define BAUD 115200
+//#define BAUD 115200
+#define BAUD 57600
+//The same baud rate should be used for both the Arduino and the Dynamixel. e.g. if you want to talk to the
+//Arduino at 115200, then you need to re-program the Dynamixel to be at 115200. Of course, if you don't use
+//the Dynamixels, you can set this to whatever you like. 
+
 #define DYNAMIXEL_SUPPORT
 //Note: If enabled, the Dynamixel Arduino shield is required and the standard Arduino UNO serial port is NOT functional! 
 //You must install the USB to Serial interface on the Dynamixel Shield and use that for communication. RTFM
+
 #define STEPPER_SUPPORT
+
+#define ETO
+//sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
+//https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
+
 
 #ifdef DYNAMIXEL_SUPPORT
 #include <Dynamixel2Arduino.h>
@@ -267,6 +278,9 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
     DEBUG_SERIAL.println(", \"Torque\": \"On\"");
     }
   DEBUG_SERIAL.println("}]");
+#ifdef EOT
+  DEBUG_SERIAL.write(04); //EOT
+#endif
   }
 #endif
 
@@ -274,6 +288,9 @@ void setup() {
   DEBUG_SERIAL.begin(BAUD);
   while(!DEBUG_SERIAL); //Wait until the serial port is opened
   DEBUG_SERIAL.println("[{\"Ready\": \"true\"}]");
+#ifdef EOT
+        DEBUG_SERIAL.write(04); //EOT
+#endif
 #ifdef DYNAMIXEL_SUPPORT
   servo_id = SERVO_ID;
   dxl.setPortProtocolVersion(2.0);
@@ -358,9 +375,9 @@ void loop(){
 #endif
           }
         DEBUG_SERIAL.println("]}");
+#ifdef EOT
         DEBUG_SERIAL.write(04); //EOT
-//sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
-//https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
+#endif
         //DEBUG_SERIAL.print("\n"); //new line can help after EOT to tigger xmit on OS serial handler
         break;
       case '-': 
@@ -420,6 +437,9 @@ void loop(){
         DEBUG_SERIAL.print(", \"Dir\": ");
         DEBUG_SERIAL.print(dir_pin);
         DEBUG_SERIAL.println("}]");
+#ifdef EOT
+        DEBUG_SERIAL.write(04); //EOT
+#endif
         pinMode(step_pin, OUTPUT);digitalWrite(step_pin, LOW);
         pinMode(dir_pin, OUTPUT);digitalWrite(dir_pin, LOW);
         p = n = 0;
@@ -434,12 +454,18 @@ void loop(){
         DEBUG_SERIAL.print(", \"Velocity\": ");
         DEBUG_SERIAL.print(n);
         DEBUG_SERIAL.println("}]");
+#ifdef EOT
+        DEBUG_SERIAL.write(04); //EOT
+#endif
         break;
       case 'G': //<position>G  position Goto 
         stepper.moveTo(n);
         DEBUG_SERIAL.print("[{\"Goto\": ");
         DEBUG_SERIAL.print(n);
         DEBUG_SERIAL.println("}]");
+#ifdef EOT
+        DEBUG_SERIAL.write(04); //EOT
+#endif
         break;
 /*
 #E  pin Endstop. Input with Pullup. Run motor ccw until pin goes low. stepper.setMaxSpeed(SLOW_SPEED); stepper.moveTo(-MAX_LONG); if (!digitalRead(n)) stepper.stop();
@@ -461,6 +487,9 @@ void loop(){
         else { //can't move!
           DEBUG_SERIAL.println("[{\"Error:\" \"ServoPosition\"}]");
           }
+#ifdef EOT
+        DEBUG_SERIAL.write(04); //EOT
+#endif
         break;
       case 'T': 
         if (dxl.setGoalPWM(p, n, UNIT_PERCENT)) {
@@ -473,6 +502,9 @@ void loop(){
         else { //can't set torque!
           DEBUG_SERIAL.println("[{\"Error:\" \"ServoTorque\"}]");
           }
+#ifdef EOT
+        DEBUG_SERIAL.write(04); //EOT
+#endif
         break;
 #endif
       case '\n': 
@@ -485,6 +517,9 @@ void loop(){
         DEBUG_SERIAL.print(n);
         DEBUG_SERIAL.print(cmd);
         DEBUG_SERIAL.println("?\"");
+#ifdef EOT
+        DEBUG_SERIAL.write(04); //EOT
+#endif
       }
     if ('0'>cmd || '_'==cmd) {//was it punctuation?
       digitalWrite(p,HIGH); //raise the clock
