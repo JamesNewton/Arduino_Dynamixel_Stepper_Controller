@@ -5,7 +5,7 @@ It is a simple Arduino script to set pins high, low, input, pull up, or analog/s
 clock out data with timing, and read all or a single pin back via serial IO. It also (optionally) supports Dynamixel Servos given a sheild and Stepper Motors given a standard step / direction driver. It's been tested with the [XC-430](https://emanual.robotis.com/docs/en/dxl/x/xc430-w150/), and [XL-320](https://emanual.robotis.com/docs/en/dxl/x/xl320/) servos. 
 
 Generally useful to turn the Arduino into a tool for generating test signals, and reading back results. 
-- Not as powerful as the busPirate or LabNation SmartScope, but more flexible in some ways and much easier to operate. And it runs a Servo or Stepper in useful ways (e.g. with acceleration and max velocity).
+- Not as powerful as the busPirate or LabNation SmartScope, but more flexible in some ways and much easier to operate. And it optionally runs a Servo or Stepper in useful ways (e.g. with acceleration and max velocity) if you enable that and install those libraries.
 - Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a Pi or other high level robot controller. And it does not provide high level drivers for a fixed set of devices. It is more useful as means of developing drivers. 
 
 This is a "kitbash" of this gist:
@@ -111,11 +111,12 @@ https://emanual.robotis.com/docs/en/parts/interface/dynamixel_shield/
 for instructions and connections on the Shield. 
 
 ### BUILD:
-1. Install Dynamixel libraries into Arduino IDE (must be 1.8.5 or up) via menu: "Sketch" / "Include Libraries" / "Manage Libraries" and then search for Dynamixel. Select and then "Install" the DYNAMIXEL2Arduino and then DynamixelShield 
-2. Download the .ino file above and place in folder of the same name under Arduino folder. e.g. Documents\Arduino\DynamixelShieldSetup\DynamixelShieldSetup.ino and open it. 
-3. Modify the BAUD value around line 50 to what your servo uses (default is 57600), SERVO_ID to match the servo address (default is 1) and SERVO_MODE to match the mode (default is the extended position mode which might not be supported on your servo)
-4. Connect the Arduino /without the shield/ and program it. 
-5. Connect the TTL serial adapter TTL Serial USB adapter to J3 on the shield. This is the small 4 pin connector off by itself near the green power terminal. 
+1. If you want the SERVO_SUPPORT: Install Dynamixel libraries into Arduino IDE (must be 1.8.5 or up) via menu: "Sketch" / "Include Libraries" / "Manage Libraries" and then search for Dynamixel. Select and then "Install" the DYNAMIXEL2Arduino and then DynamixelShield 
+2. If you want the STEPPER_SUPPORT: Install the [AccelStep](https://www.airspayce.com/mikem/arduino/AccelStepper/index.html) library into the Arduino IDE via menu: "Sketch" / "Include Libraries" / "Manage Libraries" and then search for AccelStep. Select and then "Install" it.
+3. Download the .ino file above and place in folder of the same name under Arduino folder. e.g. Documents\Arduino\DynamixelShieldSetup\DynamixelShieldSetup.ino and open it. 
+4. Modify the BAUD value around line 50 to what your servo uses (default is 57600) or whatever you like if you aren't using the servos, SERVO_ID to match the servo address (default is 1) and SERVO_MODE to match the mode (default is the extended position mode which might not be supported on your servo)
+5. Connect the Arduino /without the shield/ and program it. 
+6. If you want the SERVO_SUPPORT: Connect the TTL serial adapter TTL Serial USB adapter to J3 on the shield. This is the small 4 pin connector off by itself near the green power terminal. 
 
 Shield J3 pin | TTL adapter pin
 -----------|----------------
@@ -124,14 +125,14 @@ V | don't connect
 R | TX
 T | RX
 
-6. Cut the DC volt adapter wires and strip them, then /carefully/ test to see which wire is positive and which negative before connecting to the shield. Getting that backwards will cost rather a lot. You should also be able to just use the barrel connector on the Arduino if you have the right adapter for that. Again, the voltage should match the servo's requirements.
-7. Plug the shield onto the Arduino.
+7. Cut the DC volt adapter wires and strip them, then /carefully/ test to see which wire is positive and which negative before connecting to the shield. Getting that backwards will cost rather a lot. You should also be able to just use the barrel connector on the Arduino if you have the right adapter for that. Again, the voltage should match the servo's requirements.
+8. Plug the shield onto the Arduino.
 
 ### OPERATE:
 1. If you are using the Dynamixel Shield, check that the SW2 "UART" switch is in "DYANMIXEL" vs "UPLOAD" (see top right of picture below, switch is toward top of picture) and plug the TTL Serial adapter into your PC USB. Otherwise, (assuming you commented out the `#define SERVO_SUPPORT`) just plug in to the Arduino like always. In either case, you will need to configure a serial terminal program like Arduino Serial Monitor, PuTTY, or RealTerm, or whatever to 57600 N 8 1 (or whatever BAUD was set to in the code) on whatever port that shows up on.
 2. Turn on the AC adapter and verify that the Arduino power LED comes on. Press the reset switch on the Arduino. You should see `[{"Ready": "true"}]` on your terminal program. Send `?` to test communications and ensure you get back a response. Send a command to turn the LED on or off, e.g. `13H` and `13L` should be the pin on the Uno. 
 3. To use a Dynamixel, plug in a servo, and turn on the SW1 servo "POWER" switch. Check that the Servo LED blinks. (see bottom right of picture below, switch is toward top of picture). Reset the servo with it's id number and desired mode, e.g. `1,4R` and verify the servo blinks. Now enter e.g. `90S` and verify the servo moves to 90 degrees. 
-4. To use a stepper driver, (assuming you commented IN the `#define STEPPER_SUPPORT`) connect ground to ground, then connect the step line to one of the available pin, e.g. 10 and step to another, e.g. 11. Power on the stepper driver and motor, then send e.g. `10,11M` to initialze the system, and e.g. `240,1000V` to set speed and acceleration, then use e.g. `500G` and then `0G` to move the motor a bit. You will need to change the V settings to match your system. 
+4. To use a stepper driver, (assuming you commented IN the `#define STEPPER_SUPPORT` and installed the library) connect ground to ground, then connect the step line to one of the available pin, e.g. 10 and step to another, e.g. 11. Power on the stepper driver and motor, then send e.g. `10,11M` to initialze the system, and e.g. `240,1000V` to set speed and acceleration, then use e.g. `500G` and then `0G` to move the motor a bit. You will need to change the V settings to match your system. 
 
 <img src="https://user-images.githubusercontent.com/419392/89340621-de190500-d654-11ea-8f35-cad97d78e372.png">
 
