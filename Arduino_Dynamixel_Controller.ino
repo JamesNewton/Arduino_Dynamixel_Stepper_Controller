@@ -113,6 +113,7 @@ Examples:
 
 #ifdef DYNAMIXEL_SUPPORT
 #include <Dynamixel2Arduino.h>
+//https://emanual.robotis.com/docs/en/software/arduino_ide/#advanced-users
 
 // Please modify it to suit your hardware.
 #if defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_MEGA2560) // When using DynamixelShield
