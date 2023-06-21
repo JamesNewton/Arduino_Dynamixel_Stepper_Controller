@@ -262,7 +262,7 @@ void delayus(unsigned long us) {
 void rebootServo(int id, int mode) { //setup servo id number into mode.
   dxl.torqueOff(id);
   if (!mode) mode = SERVO_MODE;
-  DEBUG_SERIAL.print("[{\"Servo\": ");
+  DEBUG_SERIAL.print("{\"Servo\": ");
   DEBUG_SERIAL.print(id);
   if (dxl.setOperatingMode(id, mode)) {
     DEBUG_SERIAL.print(", \"Mode\": ");
@@ -281,7 +281,7 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
   if (dxl.torqueOn(id)){
     DEBUG_SERIAL.println(", \"Torque\": \"On\"");
     }
-  DEBUG_SERIAL.println("}]");
+  DEBUG_SERIAL.println("}");
 #ifdef EOT
   DEBUG_SERIAL.write(04); //EOT
 #endif
@@ -291,7 +291,7 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
 void setup() {
   DEBUG_SERIAL.begin(BAUD);
   while(!DEBUG_SERIAL); //Wait until the serial port is opened
-  DEBUG_SERIAL.println("[{\"Ready\": \"true\"}]");
+  DEBUG_SERIAL.println("{\"Ready\": \"true\"}");
 #ifdef EOT
         DEBUG_SERIAL.write(04); //EOT
 #endif
@@ -436,11 +436,11 @@ void loop(){
       case 'M': //<step>,<dir>M step, direction Motor stepper
         if (p) step_pin = p;
         if (n) dir_pin = n;
-        DEBUG_SERIAL.print("[{\"Step\": ");
+        DEBUG_SERIAL.print("{\"Step\": ");
         DEBUG_SERIAL.print(step_pin);
         DEBUG_SERIAL.print(", \"Dir\": ");
         DEBUG_SERIAL.print(dir_pin);
-        DEBUG_SERIAL.println("}]");
+        DEBUG_SERIAL.println("}");
 #ifdef EOT
         DEBUG_SERIAL.write(04); //EOT
 #endif
@@ -453,20 +453,20 @@ void loop(){
         if (!p) p = DEFAULT_ACCEL;
         if (!n) n = DEFAULT_VELOCITY;
         stepper.setAcceleration(p + 1);stepper.setMaxSpeed(n);
-        DEBUG_SERIAL.print("[{\"Accelleration\": ");
+        DEBUG_SERIAL.print("{\"Accelleration\": ");
         DEBUG_SERIAL.print(p+1);
         DEBUG_SERIAL.print(", \"Velocity\": ");
         DEBUG_SERIAL.print(n);
-        DEBUG_SERIAL.println("}]");
+        DEBUG_SERIAL.println("}");
 #ifdef EOT
         DEBUG_SERIAL.write(04); //EOT
 #endif
         break;
       case 'G': //<position>G  position Goto 
         stepper.moveTo(n);
-        DEBUG_SERIAL.print("[{\"Goto\": ");
+        DEBUG_SERIAL.print("{\"Goto\": ");
         DEBUG_SERIAL.print(n);
-        DEBUG_SERIAL.println("}]");
+        DEBUG_SERIAL.println("}");
 #ifdef EOT
         DEBUG_SERIAL.write(04); //EOT
 #endif
@@ -482,14 +482,14 @@ void loop(){
         break; 
       case 'S': //<id>,<degrees> sets goal position. e.g. 1,90S 100000D 45S
         if (dxl.setGoalPosition(p, n, UNIT_DEGREE)) {
-          DEBUG_SERIAL.print("[{\"Servo\": ");
+          DEBUG_SERIAL.print("{\"Servo\": ");
           DEBUG_SERIAL.print(p);
           DEBUG_SERIAL.print(", \"Goal\": ");
           DEBUG_SERIAL.print(n);
-          DEBUG_SERIAL.println("}]");
+          DEBUG_SERIAL.println("}");
           }
         else { //can't move!
-          DEBUG_SERIAL.println("[{\"Error:\" \"ServoPosition\"}]");
+          DEBUG_SERIAL.println("{\"Error:\" \"ServoPosition\"}");
           }
 #ifdef EOT
         DEBUG_SERIAL.write(04); //EOT
@@ -497,14 +497,14 @@ void loop(){
         break;
       case 'T': 
         if (dxl.setGoalPWM(p, n, UNIT_PERCENT)) {
-          DEBUG_SERIAL.print("[{\"Servo\": ");
+          DEBUG_SERIAL.print("{\"Servo\": ");
           DEBUG_SERIAL.print(p);
           DEBUG_SERIAL.print(", \"Torque\": ");
           DEBUG_SERIAL.print(n);
-          DEBUG_SERIAL.println("}]");
+          DEBUG_SERIAL.println("}");
           }
         else { //can't set torque!
-          DEBUG_SERIAL.println("[{\"Error:\" \"ServoTorque\"}]");
+          DEBUG_SERIAL.println("{\"Error:\" \"ServoTorque\"}");
           }
 #ifdef EOT
         DEBUG_SERIAL.write(04); //EOT
