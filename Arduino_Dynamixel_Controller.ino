@@ -95,7 +95,7 @@ Examples:
 */
 
 //#define BAUD 115200
-#define BAUD 57600
+#define BAUD 57600 //Default Dynamixel baudrate
 //The same baud rate should be used for both the Arduino and the Dynamixel. e.g. if you want to talk to the
 //Arduino at 115200, then you need to re-program the Dynamixel to be at 115200. Of course, if you don't use
 //the Dynamixels, you can set this to whatever you like. 
@@ -106,14 +106,13 @@ Examples:
 
 #define STEPPER_SUPPORT
 
-#define ETO
+//#define EOT
 //sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
 //https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
 
 
 #ifdef DYNAMIXEL_SUPPORT
 #include <Dynamixel2Arduino.h>
-//https://emanual.robotis.com/docs/en/software/arduino_ide/#advanced-users
 
 // Please modify it to suit your hardware.
 #if defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_MEGA2560) // When using DynamixelShield
@@ -265,9 +264,13 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
   if (!mode) mode = SERVO_MODE;
   DEBUG_SERIAL.print("[{\"Servo\": ");
   DEBUG_SERIAL.print(id);
-  if (dxl.setOperatingMode(id, mode)){
+  if (dxl.setOperatingMode(id, mode)) {
     DEBUG_SERIAL.print(", \"Mode\": ");
     DEBUG_SERIAL.print(mode);
+    }
+  else {
+    DEBUG_SERIAL.print(", \"Status\": \"Error\"}");
+    return;
     }
   if (dxl.writeControlTableItem(PROFILE_VELOCITY, id, 0)){ //0 is no velocity limit
     DEBUG_SERIAL.print(", \"Velocity\": \"MAX\"");
