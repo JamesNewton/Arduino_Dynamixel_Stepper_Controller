@@ -318,10 +318,10 @@ void loop(){
     int c = DEBUG_SERIAL.read(); //get the data
     if ('0' <= c && c <= '9') { //if it's a digit
       n = (c-'0')*sign + n*radix; //add it to n, shift n up 1 digit
-      sign = 1; //in case it was negative
       continue; //and loop
       }
     cmd = char(c); //wasn't a number, must be a command
+    sign = 1; //in case it was negative
     if (' '==cmd || '\t'==cmd) { continue;} //whitespace does nothing
     if (','==cmd) { p=n; n=0; continue;} //save n to p, clear n, loop
     if (0==n) {
