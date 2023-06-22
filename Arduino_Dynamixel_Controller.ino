@@ -269,7 +269,7 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
     DEBUG_SERIAL.print(mode);
     }
   else {
-    DEBUG_SERIAL.print(", \"Status\": \"Error\"}");
+    DEBUG_SERIAL.println(", \"Status\": \"Error\"}");
     return;
     }
   if (dxl.writeControlTableItem(PROFILE_VELOCITY, id, 0)){ //0 is no velocity limit
