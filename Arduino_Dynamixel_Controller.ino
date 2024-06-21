@@ -3,7 +3,6 @@
 //The stupid EEPROM library being included causes all errors to show up as "invalid header file"
 
 //https://docs.arduino.cc/learn/built-in-libraries/eeprom/
-//EEPROM.clear(); //zero out the entire EEPROM
 //EEPROM.length(); //returns the length of the 
 //byte = EEPROM[addr]; //read ? from EEPROM
 //EEPROM[addr] = bytes; //write
@@ -19,7 +18,7 @@
 //You must install the USB to Serial interface on the Dynamixel Shield and use that for communication. RTFM
 //#define STEPPER_SUPPORT
 
-
+#define PROG_SPACE 100
 #define ANALOG_PINS NUM_ANALOG_INPUTS
 #define DIGITAL_PINS NUM_DIGITAL_PINS 
 //change above if you want ? to report fewer than actual pins.
@@ -51,7 +50,7 @@ long reg[NO_REGS]; //registers, each is a long, several bytes
 int pc; //program counter. Indexes EEPROM
 int stack[5]; //stack
 int sp; //stack pointer
-int flag; //true false flag
+bool skipping; //are we skipping for a conditional
 
 #define REGLTR(addr) (reg[addr-'a'])
 //make it easy to index the reg array with a character letter e.g.REGLTR('b') is reg[1]
@@ -71,6 +70,18 @@ void delayus(unsigned long us) {
 void setup() {
   DEBUG_SERIAL.begin(BAUD);
   while(!DEBUG_SERIAL); //Wait until the serial port is opened
+  int l = EEPROM.length();
+  if (l>PROG_SPACE) l = PROG_SPACE;
+  EEPROM.get(0,n);//load up the count of memory used
+  if (n<=0 || n>l) { 
+    for (int i = 0; i<l; i++) {
+      EEPROM[i] = 0;
+      }
+    n = sizeof(reg[0]);
+    }
+  REGLTR('m') = n;
+  REGLTR('z') = l;
+  printreg('m'-'a');
 
   n=0; //number
   p=0; //pin number
@@ -78,8 +89,6 @@ void setup() {
   radix=10;
   sign=1;
   //mem = reg[0];
-  EEPROM.get(0,REGLTR('m'));//load up the count of memory used
-  REGLTR('m')+=sizeof(reg[0]);
   op = 0;
   pc = 0;
   sp = 0;
@@ -116,13 +125,65 @@ int printstat() {
 int printreg(int n) {
   DEBUG_SERIAL.print((char)('a'+n));
   DEBUG_SERIAL.print(":");
+  DEBUG_SERIAL.print(reg[n]);
+  DEBUG_SERIAL.print("\"");
   char c;
   for (int i=reg[n]; i < REGLTR('m'); i++) {
     c = (char)EEPROM[i];
 	DEBUG_SERIAL.print(c);
     if ('.' == c) break;
   }
-  DEBUG_SERIAL.print('\n');
+  DEBUG_SERIAL.print("\"\n");
+}
+
+void display_status() {
+  DEBUG_SERIAL.print("{"); //optional, just to signal start of data
+  if (0==n) { //if we didn't have a number selecting a pin
+    DEBUG_SERIAL.print("\"?\":[\""); //optional, just to signal start of data
+    for (int p = 0; p < DIGITAL_PINS; p++) { //get all the pins
+      //n = digitalRead(p) + n<<1;   //convert to binary number
+      if (DXL_DIR_PIN != p) { //don't mess with the servo pins
+        DEBUG_SERIAL.print(digitalRead(p));//and also print.
+        }
+      }
+    DEBUG_SERIAL.print("\"");
+    //DEBUG_SERIAL.print(n); //print the binary value of all pins
+    for (int p = 0; p < ANALOG_PINS; p++) { //also check all the analog
+      if (DXL_DIR_PIN != p) { //don't mess with the servo pins
+        DEBUG_SERIAL.print(",");
+        DEBUG_SERIAL.print(analogRead(p));
+        }
+      }
+    DEBUG_SERIAL.print("]");
+    }
+  else { //specific pin or address
+    DEBUG_SERIAL.print("\"");
+    DEBUG_SERIAL.print(n);
+    DEBUG_SERIAL.print("\":[");
+    if (DXL_DIR_PIN != n) { //don't mess with the servo pins
+      int value = 0;
+      if (NUM_DIGITAL_PINS > n) { //it's a pin
+        value = digitalRead(n);
+      } else { //it's an address
+        if (NO_REGS+NUM_DIGITAL_PINS < n) n = NO_REGS+NUM_DIGITAL_PINS; 
+        value = reg[n-NUM_DIGITAL_PINS]; //to a register
+      }
+      DEBUG_SERIAL.print(value); //just that one value
+      if (ANALOG_PINS > n) { //if there is an analog channel
+        value = analogRead(p); //use that instead.
+        DEBUG_SERIAL.print(",");
+        DEBUG_SERIAL.print(value); //also return it
+        }
+      }
+    DEBUG_SERIAL.print("]");
+    }
+  DEBUG_SERIAL.println("}");
+  //DEBUG_SERIAL.write(04); //EOT
+  //sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
+  //https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
+  DEBUG_SERIAL.print("\n"); //new line can help after EOT to tigger xmit on OS serial handler
+
+
 }
 
 void loop(){
@@ -147,11 +208,6 @@ void loop(){
     }
     if (quoting) { //if we are quoting, just put it away
       EEPROM.update(REGLTR('m'),cmd); //add the current address, then increment it
-      if (debugging) {
-        DEBUG_SERIAL.print(REGLTR('m'));
-        DEBUG_SERIAL.print(':');
-        DEBUG_SERIAL.println((char)EEPROM.read(REGLTR('m')));
-      }
       REGLTR('m')++;
       continue; //and do nothing more
     }
@@ -160,40 +216,19 @@ void loop(){
         reg[p-DIGITAL_PINS]=n; //TODO check for an ':' op as well. actually do a switch here.
         p=0; //for now
       }
+      if ('.'==cmd || 0==cmd) {
+        pc = stack[sp]; //return, always a zero at stack[0]
+        if (sp) sp--; //stop at 0
+        }
       n=0; cmd=0;//clear command and value (but not p) at end of line.
       d=0; //delay doesn't last past one line
-      pc = stack[sp]; //return, always a zero at stack[0]
-      if (sp) sp--; //stop at 0
       quoting = false;
+      skipping = false; //only skip to the end of the line.
       DEBUG_SERIAL.print("cr");
       continue; //loop now, no delay
     }
-    if (')'==cmd) {//call
-      if (sp >= sizeof(stack)/sizeof(stack[0])) {
-        DEBUG_SERIAL.println("\nSTACK OVERFLOW");
-        continue;
-        }
-      sp++; stack[sp] = pc;
-      pc = reg[n-NUM_DIGITAL_PINS];
-      n = 0;
-      if (debugging) {DEBUG_SERIAL.print("run from "); DEBUG_SERIAL.println(pc);}
-      continue;
-      }
-    if ('@'==cmd) {// //value AT address, source based on range
-      if (n < ANALOG_PINS) { n = analogRead(n); }
-      else if (n < DIGITAL_PINS) { n = digitalRead(n); }
-      else if (n < DIGITAL_PINS+NO_REGS ) { n = reg[n-DIGITAL_PINS]; }
-      else if (n >= DIGITAL_PINS+NO_REGS ) { n = EEPROM[n-(DIGITAL_PINS+NO_REGS)];}
-      continue;
-      } 
-    if ('!'==cmd) {// Write value to address, destination depends on range
-      if (p < ANALOG_PINS) { analogWrite(p, n); }
-      else if (p < DIGITAL_PINS) { digitalWrite(p, n); }
-      else if (p < DIGITAL_PINS+NO_REGS ) { reg[p-DIGITAL_PINS] = n; }
-      else if (p >= DIGITAL_PINS+NO_REGS ) { EEPROM[p-(DIGITAL_PINS+NO_REGS)]=n;}
-      continue;
-      }
-if ('0' <= c && c <= '9') { //if it's a digit
+	if (skipping) continue; //unless it was an EOL, it's after a failed '?', so we don't care. 
+	if ('0' <= c && c <= '9') { //if it's a digit
       n = (c-'0')*sign + n*radix; //add it to n, shift n up 1 digit
       sign = 1; //in case it was negative
       continue; //and loop
@@ -207,63 +242,49 @@ if ('0' <= c && c <= '9') { //if it's a digit
     if (','==cmd) { p=n; n=0; continue;} //save n to p, clear n, loop
     if (0==n) {
       if ('-'==cmd) {sign = -1; continue;} //if we don't have a number, it's a negative
+      /* this seems like a super bad idea... why do this?
       n=p; //if we don't have a value, use the prevous pin number. 
       //Note this means n can't be zero unless p is. 1,0 isn't possible, it becomes 1,1
+      */
       } 
     switch (cmd) {
-      case '?': //get information
-        DEBUG_SERIAL.print("{"); //optional, just to signal start of data
-        if (0==n) { //if we didn't have a number selecting a pin
-          DEBUG_SERIAL.print("\"?\":[\""); //optional, just to signal start of data
-          for (int p = 0; p < DIGITAL_PINS; p++) { //get all the pins
-            //n = digitalRead(p) + n<<1;   //convert to binary number
-            if (DXL_DIR_PIN != p) { //don't mess with the servo pins
-              DEBUG_SERIAL.print(digitalRead(p));//and also print.
-              }
-            }
-          DEBUG_SERIAL.print("\"");
-          //DEBUG_SERIAL.print(n); //print the binary value of all pins
-          for (int p = 0; p < ANALOG_PINS; p++) { //also check all the analog
-            if (DXL_DIR_PIN != p) { //don't mess with the servo pins
-              DEBUG_SERIAL.print(",");
-              DEBUG_SERIAL.print(analogRead(p));
-              }
-          	}
-          DEBUG_SERIAL.print("]");
+      case ')': //call
+        if (sp >= sizeof(stack)/sizeof(stack[0])) {
+          DEBUG_SERIAL.println("\nSTACK OVERFLOW");
+          break;
           }
-        else { //specific pin or address
-          DEBUG_SERIAL.print("\"");
-          DEBUG_SERIAL.print(n);
-          DEBUG_SERIAL.print("\":[");
-          if (DXL_DIR_PIN != n) { //don't mess with the servo pins
-            int value = 0;
-            if (NUM_DIGITAL_PINS > n) { //it's a pin
-              value = digitalRead(n);
-            } else { //it's an address
-              if (NO_REGS+NUM_DIGITAL_PINS < n) n = NO_REGS+NUM_DIGITAL_PINS; 
-              value = reg[n-NUM_DIGITAL_PINS]; //to a register
-            }
-            DEBUG_SERIAL.print(value); //just that one value
-            if (ANALOG_PINS > n) { //if there is an analog channel
-              value = analogRead(p); //use that instead.
-              DEBUG_SERIAL.print(",");
-              DEBUG_SERIAL.print(value); //also return it
-              }
-            }
-          DEBUG_SERIAL.print("]");
-          }
-        DEBUG_SERIAL.println("}");
-        //DEBUG_SERIAL.write(04); //EOT
-//sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
-//https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
-        DEBUG_SERIAL.print("\n"); //new line can help after EOT to tigger xmit on OS serial handler
+        sp++; stack[sp] = pc;
+        pc = reg[n-NUM_DIGITAL_PINS];
+        n = 0;
+        if (debugging) {DEBUG_SERIAL.print("run from "); DEBUG_SERIAL.println(pc);}
         break;
-      case '-': 
+      case '@': // //value AT address, source based on range
+        if (n < ANALOG_PINS) { n = analogRead(n); }
+        else if (n < DIGITAL_PINS) { n = digitalRead(n); }
+        else if (n < DIGITAL_PINS+NO_REGS ) { n = reg[n-DIGITAL_PINS]; }
+        else if (n >= DIGITAL_PINS+NO_REGS ) { n = EEPROM[n-(DIGITAL_PINS+NO_REGS)];}
+        break;
+      case '!': // Write value to address, destination depends on range
+        if (p < ANALOG_PINS) { analogWrite(p, n); }
+        else if (p < DIGITAL_PINS) { digitalWrite(p, n); }
+        else if (p < DIGITAL_PINS+NO_REGS ) { reg[p-DIGITAL_PINS] = n; }
+        else if (p >= DIGITAL_PINS+NO_REGS ) { EEPROM[p-(DIGITAL_PINS+NO_REGS)]=n;}
+        break;
+      case '?': //get information
+      	if (pc) { //executing
+          if (!n) {//and not true
+            skipping = true;
+          	}
+          n = 0; //done with the condition, clear for the next command.
+          }
+        else { //interactive
+	        display_status();
+        	}
+        break;
       case 'H': //set pin n output high
         pinMode(n,OUTPUT);
         digitalWrite(n,HIGH);
         break;
-      case '_': 
       case 'L': //set pin n output low
         pinMode(n,OUTPUT);
         digitalWrite(n,LOW);
@@ -273,31 +294,6 @@ if ('0' <= c && c <= '9') { //if it's a digit
         break;
       case 'P': //set pin n input with pullup
         pinMode(n,INPUT_PULLUP);
-        break;
-      case '.': //clock in data from n via p
-        pinMode(n,INPUT_PULLUP); //make n input with pull now
-        break;
-      case '(': //I2C start, data low while clock high
-        pinMode(n,OUTPUT);
-        digitalWrite(n,HIGH); //data high
-        pinMode(p,OUTPUT); //setup clock (if not already)
-        digitalWrite(p,HIGH); //send clock high
-        delayus(d); //wait
-        digitalWrite(n,LOW); //data low
-        delayus(d); //wait
-        digitalWrite(p,LOW); //send clock low
-        continue; //no further processing
-        break;
-      case ')': //I2C stop, data low while clock high
-        pinMode(n,OUTPUT); //data may be floating high (input from slave)
-        digitalWrite(n,LOW); //so we need to drive it low
-        pinMode(p,OUTPUT); //setup clock (if not already)
-        digitalWrite(p,LOW); //send clock high
-        delayus(d);
-        pinMode(p,INPUT_PULLUP); //clock floats high
-        delayus(d);
-        pinMode(n,INPUT_PULLUP); //data floats high
-        continue; //no further processing
         break;
       case 'A': //set pin p to analog output value n
         pinMode(p,OUTPUT);
@@ -314,22 +310,12 @@ if ('0' <= c && c <= '9') { //if it's a digit
         DEBUG_SERIAL.print(cmd);
         DEBUG_SERIAL.println("?\"");
       } 
-    if ('0'>cmd || '_'==cmd) {//was it punctuation?
-      digitalWrite(p,HIGH); //raise the clock
-      pinMode(p,OUTPUT); 
-      delayus(d/2); //half delay
-      if ('.'==cmd) {DEBUG_SERIAL.print(digitalRead(n));}
-      digitalWrite(p,LOW); //drop the clock
-      delayus(d/2); //half delay
-      }
-    else {
-      n=0; //zero out value for next command.
-      delayus(d); //wait a bit for the next cycle.
-      }
+    //n=0; //zero out value for next command. No, only at end of line.
+    //delayus(d); //wait a bit for the next cycle.
     //p is NOT cleared, so you can keep sending new commands only
     cmd=0; //done with command.
 	}
-  delayus(CYCLE_DELAY); //save a little energy if we don't have characters. 
+  //delayus(CYCLE_DELAY); //save a little energy if we don't have characters. 
   if (debugging) {
     printstat();
     while (!DEBUG_SERIAL.available()) ;
@@ -337,3 +323,4 @@ if ('0' <= c && c <= '9') { //if it's a digit
 
 
 }
+ 
