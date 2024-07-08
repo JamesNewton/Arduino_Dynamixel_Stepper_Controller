@@ -19,9 +19,15 @@
 //#define STEPPER_SUPPORT
 
 #define PROG_SPACE 100
+//count of pins which support analog modes
 #define ANALOG_PINS NUM_ANALOG_INPUTS
-#define DIGITAL_PINS NUM_DIGITAL_PINS 
-//change above if you want ? to report fewer than actual pins.
+//Turns out NUM_DIGITAL_PINS counts ALL pins which can be used digitally, 
+//including the analog pins
+#define NUM_PINS NUM_DIGITAL_PINS
+//Track the digital /only/ pins.
+#define DIGITAL_PINS (NUM_DIGITAL_PINS - ANALOG_PINS)
+//The first analog pin number is the last digital only pin + 1
+//change above if you want to use fewer than actual pins.
 #define CYCLE_DELAY 100
 #define DXL_DIR_PIN -1
 #define DEBUG_SERIAL Serial
@@ -30,9 +36,9 @@ long n; //number accumulator. New digits are shifted in. 'a'-'z'
 long p; //secondary accumulator. ',' shifts n into p.
 /* n and p can reference 
 - just numbers, e.g. degrees for a servo, number of steps to move, etc...
-- a pin number, addressing that pin, if the value is between 1 and NUM_DIGITAL_PINS
-- a register address, between NUM_DIGITAL_PINS and that plus NO_REGS
-- an address in EEPROM, between NUM_DIGITAL_PINS+NO_REGS and that plus EEPROM.length()
+- a pin number, addressing that pin, if the value is between 1 and NUM_PINS
+- a register address, between NUM_PINS and that plus NO_REGS
+- an address in EEPROM, between NUM_PINS+NO_REGS and that plus EEPROM.length()
 
 Assuming 20 digital pins, 'a' becomes 20, 'b' 21, etc.. 
 Digits are shifted into n and p, so '1a' becomes 21 same as 'b'
@@ -93,6 +99,12 @@ void setup() {
   pc = 0;
   sp = 0;
   debugging = true;
+  DEBUG_SERIAL.print(NUM_PINS);
+  DEBUG_SERIAL.print(" pins, ");
+  DEBUG_SERIAL.print(DIGITAL_PINS);
+  DEBUG_SERIAL.print(" digital, ");
+  DEBUG_SERIAL.print(ANALOG_PINS);
+  DEBUG_SERIAL.print(" analog. ");
   }
 
 int printstat() {
@@ -122,7 +134,7 @@ int printstat() {
   return 1;
 }
 
-int printreg(int n) {
+void printreg(int n) {
   DEBUG_SERIAL.print((char)('a'+n));
   DEBUG_SERIAL.print(":");
   DEBUG_SERIAL.print(reg[n]);
@@ -140,7 +152,7 @@ void display_status() {
   DEBUG_SERIAL.print("{"); //optional, just to signal start of data
   if (0==n) { //if we didn't have a number selecting a pin
     DEBUG_SERIAL.print("\"?\":[\""); //optional, just to signal start of data
-    for (int p = 0; p < DIGITAL_PINS; p++) { //get all the pins
+    for (int p = 0; p < NUM_PINS; p++) { //get all the pins
       //n = digitalRead(p) + n<<1;   //convert to binary number
       if (DXL_DIR_PIN != p) { //don't mess with the servo pins
         DEBUG_SERIAL.print(digitalRead(p));//and also print.
@@ -162,15 +174,15 @@ void display_status() {
     DEBUG_SERIAL.print("\":[");
     if (DXL_DIR_PIN != n) { //don't mess with the servo pins
       int value = 0;
-      if (NUM_DIGITAL_PINS > n) { //it's a pin
+      if (NUM_PINS > n) { //it's a pin
         value = digitalRead(n);
       } else { //it's an address
-        if (NO_REGS+NUM_DIGITAL_PINS < n) n = NO_REGS+NUM_DIGITAL_PINS; 
-        value = reg[n-NUM_DIGITAL_PINS]; //to a register
+        if (NO_REGS+NUM_PINS < n) n = NO_REGS+NUM_PINS; 
+        value = reg[n-NUM_PINS]; //to a register
       }
       DEBUG_SERIAL.print(value); //just that one value
-      if (ANALOG_PINS > n) { //if there is an analog channel
-        value = analogRead(p); //use that instead.
+      if (n > DIGITAL_PINS && n < NUM_PINS) { //if there is an analog channel
+        value = analogRead(n); //use that as well.
         DEBUG_SERIAL.print(",");
         DEBUG_SERIAL.print(value); //also return it
         }
@@ -186,6 +198,21 @@ void display_status() {
 
 }
 
+/* test code
+
+a"13L_b@?13H.".
+b,1!
+a) //verify led on
+b,0!
+a) //verify led off
+
+a"13L_2I?13H.".
+//set pin 2 to 0
+a) //verify no led
+//set pin 2 to 1
+a) //verify led on
+
+*/
 void loop(){
   //use this while loop so we can "continue" from anywhere when we finish with a new character
   while ((DEBUG_SERIAL.available()) //if data has arrived, 
@@ -196,13 +223,13 @@ void loop(){
     if (debugging) DEBUG_SERIAL.print(cmd);
     if ('\"'==cmd) { //quote
       if (!quoting) { //this is a new quote
-        //if (NUM_DIGITAL_PINS >= n || REG_SIZE+NUM_DIGITAL_PINS <= n) {DEBUG_SERIAL.print("reg?");}
-        reg[n-NUM_DIGITAL_PINS]=REGLTR('m'); //reg being defined points to mem at reg m
+        //if (NUM_PINS >= n || REG_SIZE+NUM_PINS <= n) {DEBUG_SERIAL.print("reg?");}
+        reg[n-NUM_PINS]=REGLTR('m'); //reg being defined points to mem at reg m
         quoting = true;
       } else { //end of a quote
         EEPROM.put(EEPROM.length()-sizeof(reg[0]), REGLTR('m')); //save the number of bytes we've used
         quoting = false;
-        if (debugging) printreg(n-DIGITAL_PINS);
+        if (debugging) printreg(n-NUM_PINS);
       }
       continue; //in either case, we are done here
     }
@@ -211,9 +238,9 @@ void loop(){
       REGLTR('m')++;
       continue; //and do nothing more
     }
-    if ('\n'==cmd || '\r'==cmd || '.'==cmd || 0==cmd) { //EOL
-      if (DIGITAL_PINS < p && NO_REGS+DIGITAL_PINS > p) { //p is a register
-        reg[p-DIGITAL_PINS]=n; //TODO check for an ':' op as well. actually do a switch here.
+    if ('\n'==cmd || '\r'==cmd || '_'==cmd || '.'==cmd || 0==cmd) { //EOL
+      if (NUM_PINS < p && NO_REGS+NUM_PINS > p) { //p is a register
+        reg[p-NUM_PINS]=n; //TODO check for an ':' op as well. actually do a switch here.
         p=0; //for now
       }
       if ('.'==cmd || 0==cmd) {
@@ -234,7 +261,7 @@ void loop(){
       continue; //and loop
       }
     if ('a' <= cmd && cmd <= 'z') { //if it's a variable
-      n = n + (c - 'a') + NUM_DIGITAL_PINS; //store the address
+      n = n + (c - 'a') + NUM_PINS; //store the address
       //note that n is folded in. e.g. 1a is b
       continue; //and loop
     }
@@ -254,21 +281,21 @@ void loop(){
           break;
           }
         sp++; stack[sp] = pc;
-        pc = reg[n-NUM_DIGITAL_PINS];
+        pc = reg[n-NUM_PINS];
         n = 0;
         if (debugging) {DEBUG_SERIAL.print("run from "); DEBUG_SERIAL.println(pc);}
         break;
       case '@': // //value AT address, source based on range
-        if (n < ANALOG_PINS) { n = analogRead(n); }
+        if (n > DIGITAL_PINS && n < NUM_PINS) { n = analogRead(n); }
         else if (n < DIGITAL_PINS) { n = digitalRead(n); }
-        else if (n < DIGITAL_PINS+NO_REGS ) { n = reg[n-DIGITAL_PINS]; }
-        else if (n >= DIGITAL_PINS+NO_REGS ) { n = EEPROM[n-(DIGITAL_PINS+NO_REGS)];}
+        else if (n < NUM_PINS+NO_REGS ) { n = reg[n-NUM_PINS]; }
+        else if (n >= NUM_PINS+NO_REGS ) { n = EEPROM[n-(NUM_PINS+NO_REGS)];}
         break;
       case '!': // Write value to address, destination depends on range
-        if (p < ANALOG_PINS) { analogWrite(p, n); }
+        if (p > DIGITAL_PINS && p < NUM_PINS) { analogWrite(p, n); }
         else if (p < DIGITAL_PINS) { digitalWrite(p, n); }
-        else if (p < DIGITAL_PINS+NO_REGS ) { reg[p-DIGITAL_PINS] = n; }
-        else if (p >= DIGITAL_PINS+NO_REGS ) { EEPROM[p-(DIGITAL_PINS+NO_REGS)]=n;}
+        else if (p < NUM_PINS+NO_REGS ) { reg[p-NUM_PINS] = n; }
+        else if (p >= NUM_PINS+NO_REGS ) { EEPROM[p-(NUM_PINS+NO_REGS)]=n;}
         break;
       case '?': //get information
       	if (pc) { //executing
@@ -291,9 +318,13 @@ void loop(){
         break;
       case 'I': //set pin n input
         pinMode(n,INPUT);
+      	if (n>DIGITAL_PINS) n = analogRead(n);
+      	else n = digitalRead(n);
         break;
       case 'P': //set pin n input with pullup
         pinMode(n,INPUT_PULLUP);
+      	if (n>DIGITAL_PINS) n = analogRead(n);
+      	else n = digitalRead(n);
         break;
       case 'A': //set pin p to analog output value n
         pinMode(p,OUTPUT);
