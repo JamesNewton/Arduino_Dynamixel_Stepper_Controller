@@ -50,7 +50,8 @@ long radix;
 int sign;
 char cmd; //the current command byte code
 char op; //the current operation
-bool quoting, debugging;
+enum Q {quote_off, quote_on, quote_end } quoting; //track in quotes, just ended, or well past.
+bool debugging;
 #define NO_REGS 26
 long reg[NO_REGS]; //registers, each is a long, several bytes
 int pc; //program counter. Indexes EEPROM
@@ -218,22 +219,29 @@ void loop(){
   while ((DEBUG_SERIAL.available()) //if data has arrived, 
          || (pc > 0)//or we are running from EEPROM
         ) { 
-    int c = pc?(char)EEPROM.read(pc++):DEBUG_SERIAL.read(); //get the data
+    int c = pc?(char)EEPROM.read(pc++):DEBUG_SERIAL.read(); //get the next opcode
     cmd = char(c); 
     if (debugging) DEBUG_SERIAL.print(cmd);
     if ('\"'==cmd) { //quote
-      if (!quoting) { //this is a new quote
+      if (quoting == quote_off) {//this is a new quote
         //if (NUM_PINS >= n || REG_SIZE+NUM_PINS <= n) {DEBUG_SERIAL.print("reg?");}
         reg[n-NUM_PINS]=REGLTR('m'); //reg being defined points to mem at reg m
-        quoting = true;
-      } else { //end of a quote
-        EEPROM.put(EEPROM.length()-sizeof(reg[0]), REGLTR('m')); //save the number of bytes we've used
-        quoting = false;
-        if (debugging) printreg(n-NUM_PINS);
+        quoting = quote_on;
+        continue;
       }
-      continue; //in either case, we are done here
-    }
-    if (quoting) { //if we are quoting, just put it away
+      if (quoting == quote_on) { //end of a quote?
+        EEPROM.put(EEPROM.length()-sizeof(reg[0]), REGLTR('m')); //save the number of bytes we've used
+        quoting = quote_end;
+        if (debugging) printreg(n-NUM_PINS);
+        continue;
+      }
+      if (quoting == quote_end) { //quote JUST ended
+        quoting = quote_on; //this was a double double, restart
+        } //go on and save the quote character.
+    } else if (quoting == quote_end) { //not a quote, and we just ended one
+        quoting = quote_off; //so we are really done now, it couldn't be a double double
+        } //keep going
+    if (quoting == quote_on) { //if we are quoting, just put it away
       EEPROM.update(REGLTR('m'),cmd); //add the current address, then increment it
       REGLTR('m')++;
       continue; //and do nothing more
@@ -249,7 +257,6 @@ void loop(){
         }
       n=0; cmd=0;//clear command and value (but not p) at end of line.
       d=0; //delay doesn't last past one line
-      quoting = false;
       skipping = false; //only skip to the end of the line.
       DEBUG_SERIAL.print("cr");
       continue; //loop now, no delay
