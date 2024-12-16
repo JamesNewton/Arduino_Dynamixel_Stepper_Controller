@@ -28,7 +28,7 @@ Op   | Description
 `#L` | Set [pin](#pins) # to a low output.  e.g. `5L4L3L`
 `#D` | Delay # microseconds between each command, with a minimum of about 47uS
 `#,` | Comma. Saves pin # as the default pin for all commands e.g. `3,HLHLHL` 
-`#,#A` | Set [pin](#pins) # to an analog output with value. Only PWM outputs will respond. Use with comma command e.g. 5,120A will put 120 on pin 5
+`#,#A` | Set [pin](#pins) # to an analog output with value. Only PWM outputs (labeled "~") will respond. Use with comma command e.g. 5,120A will put 120 on pin 5
 `_-` | "low high clocked" Puts out a set of low and high signals on `#` with a clock on `#,` e.g. `5,11-__-_--_` clocks out 10010110 on pin 11, with clock pulses on pin 5. Clock is currently falling edge only. `5,11-` is basically `5L11H5H5L11L`
 `.`  | "in clock" Reads data back from `#` while clocking `#,` e.g. `5L 11H 5,11-__-_--_. .........` clocks out 10010110, gets the ack, and then 8 bits of data and a final ack.
 `(`  | I2C start with `#` as SDA and `#,` as SCL
@@ -138,6 +138,8 @@ T | RX
 
   
 ### Pins 
-Note that the Dynamixel shield uses pins 0, 1, 2, 7, and 8. Normally, an Arduino will communicate with the PC on pins 0 and 1, but those are used to talk to the servoes, so 7 and 8 are used for communications with the PC via the USB adapter instead. The built in USB adapter on the Arduino is only used for uploading the sketch and is then rendered useless. Pin 2 is also used by the shield. All the other pins available on the Arduino are unused and available for your applications. 
+Note that the Dynamixel shield uses pins 0, 1, 2, 7, and 8. Normally, an Arduino will communicate with the PC on pins 0 and 1, but those are used to talk to the servoes, so 7 and 8 are used for communications with the PC via the USB adapter instead. The built in USB adapter on the Arduino is only used for uploading the sketch and is then rendered useless. Pin 2 is also used by the shield. All the other pins available on the Arduino are unused and available for your applications.
+
+Analog IO pins actually start numbering after the digital IO pins. e.g. on an Arduino Uno, A0 is pin 14 because the last digital pin is 13. A0 is the name of the pin, 14 is its number (on an Uno). 
 
 <img src="https://emanual.robotis.com/assets/images/parts/interface/dynamixel_shield/pinmap.png">
