@@ -1,5 +1,6 @@
 # Arduino Dynamixel / Stepper Controller
 USB adapter to Arduino with Dynamixel Shield or Stepper Shield / Driver provides simple digital IO and motion. 
+[https://github.com/JamesNewton/Arduino_Dynamixel_Stepper_Controller](https://github.com/JamesNewton/Arduino_Dynamixel_Stepper_Controller)
 
 It is a simple Arduino script to set pins high, low, input, pull up, or analog/servo, 
 clock out data with timing, and read all or a single pin back via serial IO. It also (optionally) supports Dynamixel Servos given a sheild and Stepper Motors given a standard step / direction driver. It's been tested with the [XC-430](https://emanual.robotis.com/docs/en/dxl/x/xc430-w150/), and [XL-320](https://emanual.robotis.com/docs/en/dxl/x/xl320/) servos. 
