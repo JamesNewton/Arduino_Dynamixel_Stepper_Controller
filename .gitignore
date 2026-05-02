@@ -1,0 +1,13 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VSCode settings (optional, but recommended)
+.vscode/
+
+# Ignore compiled files
+*.o
+*.elf
+*.bin
+*.hex
