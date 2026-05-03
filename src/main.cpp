@@ -1,101 +1,87 @@
+#include <Arduino.h>
+
 /*
-Arduino_Dynamixel_Controller.ino
-//20170512 initial version
-//20170517 uS timing (was mS), vars are longs, i2C start/stop, and clock IN data w/.
-//20201002 Returns valid JSON.
-//20201005 James Wigglesworth updated to include Dynamixel Servo Support. See
- https://emanual.robotis.com/docs/en/parts/interface/dynamixel_shield/ for instructions and connections. 
- Install Dynamixel libraries into Arduino IDE then "Sketch" / "Include Libraries" / "Manage Libraries" and 
- then search for Dynamixel. Select and then "Install" the DYNAMIXEL2Arduino and then DynamixelShield.
- Set the SERVO_ID, SERVO_MODE, and BAUD defines below as needed (pre-set to defaults).
- Note this changes the command serial port and requires a seperate USB/Serial adapter 
- on the DYNAMIXELShield UART RX/TX connector.
-//20200203 James Newton / Tyler Skelton updated to support readback of servo position, torque, and 
- velocity and to set max "current" (torque(ish)) when moving.
-//20211220 James Newton, add support for a step / direction stepper driver with velocity and accel. See
-https://www.airspayce.com/mikem/arduino/AccelStepper/index.html for details. Install library via 
-"Sketch" / "Include Libraries" / "Manage Libraries" and then search for "AccelStep". Select and then "Install"
-//20211220 James Newton Clean up code and allow options to NOT support Dynamixel or Steppers via the defines
+Goals 
+- get close to a high level language, w/ understandable syntax, without including a compiler, 
+- using the minimum resources possible to interpret the bytecodes. 
+- The main pattern is: Destination, [Operation, Source ...], e.g. a=b+c-d. 
+- The regular keywords in a language are single characters, making use of punctuation
 
-A simple Arduino script to set pins high, low, input, pull up, or drive analog / rc servo, 
-Dynamixel servo, step / direction type stepper motor driver, clock out data with timing,
-and read all or a single pin back... all via serial IO. 
+0-9 A-F	nibble swap NUM, load hex digit into low nibble of NUM. 
+	Conversion from/to decimal is too much? Maybe not?
+:	Copy operation, e.g. "define"
+a-z	set SRC or DST to register. a is register 0. b is register 4. z is 100.
+	a:5 sets register 0 to 5. a:b copies register 4 to register 0.
+	NUM is added to the register address first. 3a is the third byte after the start of a. 
+	Register 125 is 7Da or 19z (19h=25d, z=100, +25=125) SRC, DST, etc start at 5z.
+	After DST is loaded, SRC/DST is set and the next address is loaded to SRC.
+@	index. Replace SRC or DST with the value at that address
+	 and clear op. This sets the stage for another op and SRC.
+	e.g. b@a sets the DST to the address of b plus the value of a.
+	If the SRC is a port or port pin, read that value in. 
+"	(Quote) Text. Each following char is copied to the DST until the ending quote.
+	If the DST is a variable, the chars are actually copied into FLASH and the var is
+	set to the starting address of the string in FLASH.
+	If the operation was already " when a new starting " is seen, 
+	put a " to the dest then enter text mode. "Push ""START""" prints Push "START"
+#	Converts the value of source to decimal digits and copies it to DST.
+	incrementing DST after each digit. 
++	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
+	if there is no SRC, the NUM is used as the SRC. a+1 increments a.
+	maybe if last op was +, load 1 into NUM. a++ increments a.
+-	set operation to add, pre operation to negate or not, and set carry
+&	set operation to bitwise AND. a-&b ANDs a with NOT b. a&-b subtracts b from a (& is ignored)
+|	set operation to bitwise OR
+=	set compare type to equal
+<	set compare type to less than
+>	set compare type to greater than
+{	Less than or equal (ASCII value of '<' plus '=' less 63)
+}	Greater than or equal (ASCII value of '>' plus '=' less 63)
+~	Not. Toggle true/false flag. Use with greater less and equal. 
+		; e.g. a<b~ will set the true flag if a is greater than or equal to b.
+		; >~ is less than or equal too. <~ is greater than or equal too. =~ is not equal
+	perhaps change to ` (single back tick) (ASCII value of '!' plus '=' less 63)
+?	if. Skip to the next line if the comparison fails (not TRUE)& keep skipping indented lines.
+!	else. Skip to the next line if the comparison succeeded & keep skipping indented lines. 
+(	parms. Prep for a function call by pushing parameters. 
+)	call. Call the function pointed to by DST by incrementing PCP and loading DST to PC.
+[	Start loop
+]	End loop
+.	return. Process OP/SRC, decrement PCP.
+A	(Analog) set Port pin in DST to output PWM in SRC. e.g. P2A100
+	set Port pin in SRC to read analog values in e.g. i:2P1A
+D	(Delay) DST microseconds between IO commands. Clears DST. e.g. 100DP0HLHL
+K	(Local) set SRC or DST to the LCD/Keys. 
+	The actual value stored is 0x88
+	NUM is used to select the position?
+S	(Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. P1S90
+T	(Terminal) set SRC or DST to the Serial port. 0x89
+T ?Torque set torqen to SRC for servo in DST. e.g. P1T50 sets torque of servo on port 1 to 50%
+M ?stepper Motor on <step_pin> <dir_pin> 
+V ?motion profile for the stepper. <accelleration>, <velocity limit>
+G ?goto. Move the stepper motor to the specified position.
+P	(Port) set SRC or DST to IO pins. The value stored will be 0x80-0x87. e.g. 2P1 is port 2 pin 1
+	NUM before P selects the port if more than 1 available. stored in the lower 3 bits of the value.
+	NUM after P selects the pin. These are 1 to 8, not 0 to 7 so that 0 can indicate the entire port.
+I	(In) set the Port or Port pin in SRC to an Input. E.g. a:2P7I@ reads port 2 pin 7 into a
+O	(Out) set the Port or Port pin in DST to an Output (Can't H or L just do this?)
+H	(High) set the Port pin(s) in DST to high. e.g. P1H sets port 0, pin 1 (the second pin) high.
+L	(Low) set the Port pin(s) in DST to low. e.g. 2PL sets all pins on port 2 low.
+	When the pin is an input, H and L set or clear TRUE based on the pins value.
+U	(Up) set Port pin(s) in DST to inputs will internal pull-up
+W	wait. Delay for DST u seconds. Not implemented.
+J	(Jump) move NUM lines ?
 
-Makes the Arduino: 
-- a tool for generating test signals, and reading back results. 
-Not as powerful as the busPirate, but more flexible in some ways and much easier to operate. 
-- a generic IO controller which doesn't need a new program for each application.
-Not a replacement for Firmata as this is intended to be used by a human directly 
-via serial monitor or terminal, not from a program.
+Unused (for now)
+$	
+%	printf?
+;	push?
+^	power? 
+_	label? subelement?
 
-Commands:
-#?   //return binary value of digital pin, and value for analog input if exists
-     //if # and default # (set by comma command, see below) are zero or ommitted  
-     //? returns all pins and analog values at once.
-#I   //set pin # to an input. e.g. 3I
-#P   //set pin # to an input with internal pullup. 4P
-#H   //set pin # to a high output. 3H4H
-#L   //set pin # to a low output. 5L4L3L
-#D   //delay # microseconds between each command, with a minimum of about 47uS
-#,   //comma. Saves # as the default for all commands e.g. 3,HLHLHLI
-#,#A //set pin # to an analog output with value. Only PWM outputs will respond.
-     // use with comma command e.g. 5,120A will put 120 on pin 5
-_-   //low high clocked puts out the set of low and high signals shown on # with
-     // a clock on #, e.g. 5,11-__-_--_ clocks out 10010110 on pin 11, with clock 
-     // pulses on pin 5. Clock is currently falling edge only. 
-.    //reads data back from # while clocking #, 
-     // e.g. 5L 11H 5,11-__-_--_. ......... clocks out 10010110, gets the ack, and 
-     // then 8 bits of data and a final ack.
-(    //I2C start with # as SDA and #, as SCL
-)    //I2C stop with # as SDA and #, as SCL. Pins left floating pulled up.
-     // e.g. 5,11(-__-_--_. .........) starts, 10010110, gets ack, data, ack, stop
-#,#R //Reboot / Initialize servo into mode. <id>,<mode>R. 
-     // e.g. 1,4R starts servo id 1 in extended position mode
-#,#S //Servo position. <id>,<degrees>S e.g. 2,90S moves servo id 2 to 90 degrees. 
-#,#T //Torque setting. <id>,<percent>T e.g. 1,50T sets servo id 1 to half strength.
-#,#M //stepper Motor. <step_pin>,<dir_pin>M 
-#,#V //motion profile for the stepper. <accelleration>, <velocity limit>V
-#G   //goto. Move the stepper motor to the specified position.
-     
-Commands can be strung together on one line; spaces, tabs, carrage returns and line feeds 
-are all ignored. If no n is specified, value previously saved by , is used.
-Examples:
-?
-//returns something like: {"?":["10010000001111",739,625,569,525,493,470]}
-// where 10010000001111 shows the binary value of each pin, from 0 to 14. Pin 0 is first
-// 739,625,569,525,493,470 are the values read from each analog channel 0 to 5
-1?
-//returns something like: {"1":[1,459]} where 1 is the binary value of pin 1 and 
-//459 is the analog value of channel 1
-6?
-//returns something like {"6":[0]} which is the value of pin 6 (no analog)
-4L 6H 5,120A
-//(nothing returned) Drives pin 4 low, pin 6 high and puts a PWM / Analog value of 120 on pin 5
-//this also saves pin 5 as the default pin for all commands from now on
-240A
-//(nothing returned) assuming prior command was 5,120A put 240 out pin 5 as new analog value
-?
-//assuming 5, has been recieved before, returns just the value of pin 5 and analog 5
-0,
-//(nothing returned) clears saved pin, ? now returns all pins.
-1000D 5,LHLHLHL
-//(nothing returned) delay is 1 millisecond between commands. So pin 5 pulse 3 times at ~200Hz
-//Actually about 1.04mS because of the time it takes to recieve and interpret each command. 
-//The delay command is also useful for making sure all the commands on a line arrive before they are 
-//excecuted. e.g.:
-10000D 3D 5,LHLHL?
-//will put out 2 pulses at 50uS per pulse or 10KHz without the 10000D, they are 163uS
-//The time it takes to interpret a command is about 47uS so 3D makes it 50. For 100uS
-//53D would work. Take the uS delay you want and subtract 47.
-//With larger delays, the error is consistant but has relativly less effect.
-// Note that the CYCLE_DELAY is not used as long as new characters are available.
-1,4R50T90S
-//Assuming an attached Dynamixel servo with an ID of 1, reset it to extended position mode, half
-// strength, and move to 90 degrees. 
 */
-
-//#define BAUD 115200
-#define BAUD 57600 //Default Dynamixel baudrate
+#define BAUD 115200
+//#define BAUD 57600 //Default Dynamixel baudrate
 //The same baud rate should be used for both the Arduino and the Dynamixel. e.g. if you want to talk to the
 //Arduino at 115200, then you need to re-program the Dynamixel to be at 115200. Of course, if you don't use
 //the Dynamixels, you can set this to whatever you like. 
@@ -200,55 +186,24 @@ void step_back() {
 AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 #endif
 
-#define ANALOG_PINS NUM_ANALOG_INPUTS
-#define DIGITAL_PINS NUM_DIGITAL_PINS 
-//change above if you want ? to report fewer than actual pins.
-#define CYCLE_DELAY 100
 
-long n,p,d, radix;
-int sign;
-char cmd;
+// --- CORE ABC VIRTUAL MACHINE STATE ---
+long vars[26];      // Registers 'a' through 'z'
+#define radix vars['r'-'a'] // Alias 'r' register to radix
+long num = 0;       // Numeric accumulator
+char dst = 0;       // Current Destination
+char op = 0;        // Current Operation
+char src = 0;       // Current Source
+bool src_dst = false; // False = looking for DST, True = looking for SRC
+bool true_flag = true; // For conditionals (?)
+bool skip_line = false; 
+bool dst_is_pin = false; // Flag: Is the current destination a physical pin?
+bool src_is_pin = false; // Flag: Is the current source a physical pin?
 
-/*
-https://playground.arduino.cc/Code/PwmFrequency
-Pins 9 and 10 run at 31250Hz from Timer1 which is only used for servo. 
-3 and 11 are on Timer2, 5 and 6 on Timer0. These are also used for delay, millis, etc...
-So limiting our changes to Timer1 and pins 9 and 10 allows us to still have timing.
- switch(divisor) {
-      case 1: mode = 0x01; break;   //31250Hz
-      case 8: mode = 0x02; break;   //3906.25Hz
-      case 64: mode = 0x03; break;  //488.28125Hz //default?
-      case 256: mode = 0x04; break; //122.0703125Hz
-      case 1024: mode = 0x05; break;//30.517578125Hz
-    }
-      TCCR1B = TCCR1B & 0b11111000 | mode;
-https://www.arduino.cc/en/Tutorial/SecretsOfArduinoPWM
-Says only Timer0 is used for delay and millis... 
-We can try changing 3 and 11 on Timer2 
-Different divisors, so compensate
-T2  T1 / Freq
-0x01 1 1 31250
-0x02 2 8 3906.25
-0x03 2 32  976.5625
-0x04 3 64  488.28125 //default?
-0x05 3 128 244.140625
-0x06 4 256 122.0703125
-0x07 5 1024  30.517578125
-TCCR2B = TCCR2B & 0b11111000 | mode;
-if (n>2) n--; //1,2,2,3,4,5,6
-if (n>3) n--; //1,2,2,3,3,4,5
-formula is f = clock / (510 * mode) where clock=16MHz
-If you mess with TCCR0B, delay can be compensated as follows
-0x01: delay(64000) or 64000 millis() ~ 1 second
-0x02: delay(8000) or 8000 millis() ~ 1 second
-0x03: delay(1000) or 1000 millis() ~ 1 second //default
-0x04: delay(250) or 250 millis() ~ 1 second
-0x05: delay(62) or 62 millis() ~ 1 second
-(Or 63 if you need to round up.  The number is actually 62.5)
-void setPin9_10PWMFreq(freq) {
-  
-}
-*/
+// --- MOCK HARDWARE FOR TESTING ---
+long mock_pins[30];   // Stores digital (0/1) or PWM (>1) states
+long mock_servos[30]; // Stores servo angles
+
 
 void delayus(unsigned long us) {
   if (us>10000) { //can't delayMicroseconds() more than 16838
@@ -288,261 +243,240 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
   }
 #endif
 
-void setup() {
-  DEBUG_SERIAL.begin(BAUD);
-  while(!DEBUG_SERIAL); //Wait until the serial port is opened
-  DEBUG_SERIAL.println("{\"Ready\": \"true\"}");
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-#ifdef DYNAMIXEL_SUPPORT
-  servo_id = SERVO_ID;
-  dxl.setPortProtocolVersion(2.0);
-  dxl.begin(BAUD);
-  //rebootServo();
-#endif
-  n=0; //number
-  p=0; //pin number
-  d=2; //delay. Default is 2uS or 250KHz
-  radix=10;
-  sign=1;
-#ifdef STEPPER_SUPPORT
-  stepper.setAcceleration(DEFAULT_ACCEL);stepper.setMaxSpeed(DEFAULT_VELOCITY);
-  dir_pin = DEFAULT_DIR_PIN;
-  step_pin = DEFAULT_STEP_PIN;
-#endif
+// --- INTERPRETER STUB ---
+// This is where we will incrementally port the logic from abc.cpp
+
+// --- INTERPRETER STUB ---
+void doop() {
+  if (op != 0) {
+    if (op == ':') {
+      if (dst_is_pin) {
+        mock_pins[dst] = num; // Write to mock hardware
+        // REAL HARDWARE:
+        // pinMode(dst, OUTPUT);
+        // if (num > 1) analogWrite(dst, num); else digitalWrite(dst, num);
+      } else {
+        vars[dst] = num; // Standard register assignment
+      }
+    } else if (op == '+') {
+      vars[dst] += num;
+    } else if (op == '=') {
+      true_flag = (vars[dst] == num);
+    } else if (op == 'S') { // Servo Operation
+      if (dst_is_pin) {
+        mock_servos[dst] = num; // Write to mock servo
+        // REAL HARDWARE: servo[dst].write(num);
+      }
+    }
+    
+    // Clear source and number, but keep destination
+    num = 0;
+    src = 0;
+    src_is_pin = false; 
+  }
+}
+
+void processChar(char c) {
+  if (skip_line) {
+    if (c == '\n' || c == '\r') {
+      skip_line = false; // Reset at end of line
+    }
+    return;
   }
 
-void loop(){
-  while (DEBUG_SERIAL.available() > 0) { //if data has arrived
-    int c = DEBUG_SERIAL.read(); //get the data
-    if ('0' <= c && c <= '9') { //if it's a digit
-      n = (c-'0')*sign + n*radix; //add it to n, shift n up 1 digit
-      continue; //and loop
-      }
-    cmd = char(c); //wasn't a number, must be a command
-    sign = 1; //in case it was negative
-    if (' '==cmd || '\t'==cmd) { continue;} //whitespace does nothing
-    if (','==cmd) { p=n; n=0; continue;} //save n to p, clear n, loop
-    if (0==n) {
-      if ('-'==cmd) {sign = -1; continue;} //if we don't have a number, it's a negative
-      n=p; //if we don't have a value, use the prevous pin number. 
-      //Note this means n can't be zero unless p is. 1,0 isn't possible, it becomes 1,1
-      } 
-    switch (cmd) {
-      case '?': //get information
-        DEBUG_SERIAL.print("{"); //optional, just to signal start of data
-        if (0==n) { //if we didn't have a number selecting a pin
-          DEBUG_SERIAL.print("\"?\":[\""); //optional, just to signal start of data
-          for (int p = 0; p < DIGITAL_PINS; p++) { //get all the pins
-            //n = digitalRead(p) + n<<1;   //convert to binary number
-            if (DXL_DIR_PIN != p) { //don't mess with the servo pins
-              DEBUG_SERIAL.print(digitalRead(p));//and also print.
-              }
-            }
-          DEBUG_SERIAL.print("\"");
-          //DEBUG_SERIAL.print(n); //print the binary value of all pins
-          for (int p = 0; p < ANALOG_PINS; p++) { //also check all the analog
-            if (DXL_DIR_PIN != p) { //don't mess with the servo pins
-              DEBUG_SERIAL.print(",");
-              DEBUG_SERIAL.print(analogRead(p));
-              }
-            }
-#ifdef DYNAMIXEL_SUPPORT
-          DEBUG_SERIAL.print(","); //add in data about the first servo.
-          DEBUG_SERIAL.print(dxl.getPresentPosition(servo_id, UNIT_DEGREE));
-          DEBUG_SERIAL.print(",");
-          DEBUG_SERIAL.print(dxl.getPresentPWM(servo_id, UNIT_PERCENT));
-          DEBUG_SERIAL.print(",");
-          DEBUG_SERIAL.print(dxl.getPresentVelocity(servo_id, UNIT_RPM));
-#endif
-          }
-        else { //specific pin
-          DEBUG_SERIAL.print("\"");
-          DEBUG_SERIAL.print(n);
-          DEBUG_SERIAL.print("\":[");
-          if (DXL_DIR_PIN != n) { //don't mess with the servo pins
-            DEBUG_SERIAL.print(digitalRead(n)); //just that one pin
-            if (ANALOG_PINS > n) { //if there is an analog channel
-              DEBUG_SERIAL.print(",");
-              DEBUG_SERIAL.print(analogRead(p)); //also return it
-              }
-            }
-#ifdef DYNAMIXEL_SUPPORT
-          else { //servo data
-            DEBUG_SERIAL.print(dxl.getPresentPosition(p, UNIT_DEGREE));
-            DEBUG_SERIAL.print(",");
-            DEBUG_SERIAL.print(dxl.getPresentPWM(p, UNIT_PERCENT));
-            DEBUG_SERIAL.print(",");
-            DEBUG_SERIAL.print(dxl.getPresentVelocity(p, UNIT_RPM));
-            }
-#endif
-          }
-        DEBUG_SERIAL.println("]}");
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-        //DEBUG_SERIAL.print("\n"); //new line can help after EOT to tigger xmit on OS serial handler
-        break;
-      case '-': 
-      case 'H': //set pin n output high
-        pinMode(n,OUTPUT);
-        digitalWrite(n,HIGH);
-        break;
-      case '_': 
-      case 'L': //set pin n output low
-        pinMode(n,OUTPUT);
-        digitalWrite(n,LOW);
-        break;
-      case 'I': //set pin n input
-        pinMode(n,INPUT);
-        break;
-      case 'P': //set pin n input with pullup
-        pinMode(n,INPUT_PULLUP);
-        break;
-      case '.': //clock in data from n via p
-        pinMode(n,INPUT_PULLUP); //make n input with pull now
-        break;
-      case '(': //I2C start, data low while clock high
-        pinMode(n,OUTPUT);
-        digitalWrite(n,HIGH); //data high
-        pinMode(p,OUTPUT); //setup clock (if not already)
-        digitalWrite(p,HIGH); //send clock high
-        delayus(d); //wait
-        digitalWrite(n,LOW); //data low
-        delayus(d); //wait
-        digitalWrite(p,LOW); //send clock low
-        continue; //no further processing
-        break;
-      case ')': //I2C stop, data low while clock high
-        pinMode(n,OUTPUT); //data may be floating high (input from slave)
-        digitalWrite(n,LOW); //so we need to drive it low
-        pinMode(p,OUTPUT); //setup clock (if not already)
-        digitalWrite(p,LOW); //send clock high
-        delayus(d);
-        pinMode(p,INPUT_PULLUP); //clock floats high
-        delayus(d);
-        pinMode(n,INPUT_PULLUP); //data floats high
-        continue; //no further processing
-        break;
-      case 'A': //set pin p to analog output value n
-        pinMode(p,OUTPUT);
-        analogWrite(p,n);
-        break;
-      case 'D': //delay n ms per instruction
-        d=n;
-        break;
-#ifdef STEPPER_SUPPORT
-      case 'M': //<step>,<dir>M step, direction Motor stepper
-        if (p) step_pin = p;
-        if (n) dir_pin = n;
-        DEBUG_SERIAL.print("{\"Step\": ");
-        DEBUG_SERIAL.print(step_pin);
-        DEBUG_SERIAL.print(", \"Dir\": ");
-        DEBUG_SERIAL.print(dir_pin);
-        DEBUG_SERIAL.println("}");
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-        pinMode(step_pin, OUTPUT);digitalWrite(step_pin, LOW);
-        pinMode(dir_pin, OUTPUT);digitalWrite(dir_pin, LOW);
-        p = n = 0;
-        //break; //fall through and set default accel and velocity
-      case 'V': //<acceleration>, <velocity>V Set acceleration and velocity
-                //,<velocity>V Set default acceleration and velocity
-        if (!p) p = DEFAULT_ACCEL;
-        if (!n) n = DEFAULT_VELOCITY;
-        stepper.setAcceleration(p + 1);stepper.setMaxSpeed(n);
-        DEBUG_SERIAL.print("{\"Accelleration\": ");
-        DEBUG_SERIAL.print(p+1);
-        DEBUG_SERIAL.print(", \"Velocity\": ");
-        DEBUG_SERIAL.print(n);
-        DEBUG_SERIAL.println("}");
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-        break;
-      case 'G': //<position>G  position Goto 
-        stepper.moveTo(n);
-        DEBUG_SERIAL.print("{\"Goto\": ");
-        DEBUG_SERIAL.print(n);
-        DEBUG_SERIAL.println("}");
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-        break;
-/*
-#E  pin Endstop. Input with Pullup. Run motor ccw until pin goes low. stepper.setMaxSpeed(SLOW_SPEED); stepper.moveTo(-MAX_LONG); if (!digitalRead(n)) stepper.stop();
- */
-#endif
-#ifdef DYNAMIXEL_SUPPORT
-      case 'R': //<id>,<mode>S reboots servo.
-        servo_id = p;
-        rebootServo(p,n); 
-        break; 
-      case 'S': //<id>,<degrees> sets goal position. e.g. 1,90S 100000D 45S
-        if (dxl.setGoalPosition(p, n, UNIT_DEGREE)) {
-          DEBUG_SERIAL.print("{\"Servo\": ");
-          DEBUG_SERIAL.print(p);
-          DEBUG_SERIAL.print(", \"Goal\": ");
-          DEBUG_SERIAL.print(n);
-          DEBUG_SERIAL.println("}");
-          }
-        else { //can't move!
-          DEBUG_SERIAL.println("{\"Error:\" \"ServoPosition\"}");
-          }
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-        break;
-      case 'T': 
-        if (dxl.setGoalPWM(p, n, UNIT_PERCENT)) {
-          DEBUG_SERIAL.print("{\"Servo\": ");
-          DEBUG_SERIAL.print(p);
-          DEBUG_SERIAL.print(", \"Torque\": ");
-          DEBUG_SERIAL.print(n);
-          DEBUG_SERIAL.println("}");
-          }
-        else { //can't set torque!
-          DEBUG_SERIAL.println("{\"Error:\" \"ServoTorque\"}");
-          }
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-        break;
-#endif
-      case '\n': 
-      case '\r':
-        n=0; cmd=0; //clear command and value at end of line.
-        continue; //loop now, no delay
-        break; //shouldn't get here
-      default:
-        DEBUG_SERIAL.print("\"");
-        DEBUG_SERIAL.print(n);
-        DEBUG_SERIAL.print(cmd);
-        DEBUG_SERIAL.println("?\"");
-#ifdef EOT
-        DEBUG_SERIAL.write(04); //EOT
-#endif
-      }
-    if ('0'>cmd || '_'==cmd) {//was it punctuation?
-      digitalWrite(p,HIGH); //raise the clock
-      pinMode(p,OUTPUT); 
-      delayus(d/2); //half delay
-      if ('.'==cmd) {DEBUG_SERIAL.print(digitalRead(n));}
-      digitalWrite(p,LOW); //drop the clock
-      delayus(d/2); //half delay
-      }
-    else {
-      n=0; //zero out value for next command.
-      delayus(d); //wait a bit for the next cycle.
-      }
-    //p is NOT cleared, so you can keep sending new commands only
-    cmd=0; //done with command.
-    }
-#ifdef STEPPER_SUPPORT
-  stepper.run(); //run full speed to support stepping.
-#else
-  delayus(CYCLE_DELAY); //save a little energy if we don't have characters. 
-#endif
+  // 1. Accumulate Numbers (Hex digits)
+// 1. Accumulate Numbers (Based on 'r' register radix)
+  if (c >= '0' && c <= '9') {
+    num *= radix;
+    num += (c - '0');
+    return;
   }
+  if (radix == 16 && (c >= 'A' && c <= 'F')) {
+    num *= radix;
+    num += (c - 'A' + 10);
+    return;
+  }
+
+  // 2. Identify Variables / Registers (a-z)
+  if (c >= 'a' && c <= 'z') {
+    int regIndex = c - 'a';
+    if (!src_dst) { // Looking for destination
+      dst = regIndex;
+      src_dst = true; // Next variable is source
+    } else {        // Looking for source
+      src = regIndex;
+      num = vars[src]; // Load value into accumulator
+    }
+    return;
+  }
+
+// Hardware Pin Modifier ('P')
+  if (c == 'P') {
+    if (!src_dst) { // Modifying destination
+      dst = num;
+      dst_is_pin = true;
+      src_dst = true; // Now looking for op/source
+    } else {        // Modifying source
+      src = num;
+      src_is_pin = true;
+      // REAL HARDWARE: num = digitalRead(src); 
+    }
+    num = 0; // Reset accumulator after using it for the pin number
+    return;
+  }
+
+  // Immediate Hardware Operations (High/Low)
+  if (c == 'H' || c == 'L') {
+    if (dst_is_pin) {
+      mock_pins[dst] = (c == 'H') ? 1 : 0;
+      // REAL HARDWARE: pinMode(dst, OUTPUT); digitalWrite(dst, mock_pins[dst]);
+    }
+    // Reset state since this executes immediately
+    num = 0; op = 0; src_dst = false; dst_is_pin = false;
+    return;
+  }
+
+  // 3. End of Line / Execution Trigger
+  if (c == '\n' || c == '\r') {
+    doop(); // Execute the final pending operation on the line!
+
+    // Reset state machine for the next line
+    num = 0; op = 0;
+    src_dst = false; dst_is_pin = false; src_is_pin = false;
+    return;
+  }
+
+  // 4. Handle Conditionals
+  if (c == '?') {
+    doop(); // Evaluate the condition first!
+    
+    if (!true_flag) {
+      skip_line = true;
+    }
+    // Reset for the next statement on the same line
+    src_dst = false; 
+    op = 0; 
+    return;
+  }
+
+  // 5. If it's none of the above, it's likely an operator
+  if (c != ' ' && c != '\t') { 
+    doop(); // Execute the PREVIOUS operation before loading the new one
+    op = c;
+  }
+}
+
+void evaluateABC(const char* commands) {
+  while (*commands) {
+    processChar(*commands++);
+  }
+}
+
+// --- TEST HARNESS FRAMEWORK ---
+int testCount = 0;
+int passCount = 0;
+
+void resetTestState() {
+// Reset the VM state completely
+  for(int i=0; i<26; i++) vars[i] = 0;
+  radix = 10; // Default to decimal!
+  num = 0; dst = 0; op = 0; src = 0;
+  src_dst = false; true_flag = true; skip_line = false;
+}
+
+void runTest(const char* testName, const char* code, char checkReg, long expectedValue) {
+  testCount++;
+  
+  resetTestState();
+
+  // 2. Run the bytecode
+  evaluateABC(code);
+
+  // 3. Assert the result
+  long actualValue = vars[checkReg - 'a'];
+  if (actualValue == expectedValue) {
+    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    passCount++;
+  } else {
+    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    // code string already contains \n, adding \r to align the next lines
+    DEBUG_SERIAL.printf("       Code: %s\r", code); 
+    DEBUG_SERIAL.printf("       Expected register '%c' to be %ld, but got %ld\r\n", checkReg, expectedValue, actualValue);
+  }
+}
+
+void runHardwareTest(const char* testName, const char* code, int checkPin, long expectedValue, bool isServo = false) {
+  testCount++;
+  
+  // Reset VM and Mock Hardware
+  resetTestState();
+
+  evaluateABC(code);
+
+  long actualValue = isServo ? mock_servos[checkPin] : mock_pins[checkPin];
+  
+  if (actualValue == expectedValue) {
+    Serial.printf("[PASS] %s\r\n", testName);
+    passCount++;
+  } else {
+    Serial.printf("[FAIL] %s\r\n       Code: %s\r       Expected Pin %d to be %ld, but got %ld\r\n", 
+                  testName, code, checkPin, expectedValue, actualValue);
+  }
+}
+
+void setup() {
+  DEBUG_SERIAL.begin(BAUD);
+  delay(2000); 
+
+  DEBUG_SERIAL.println("\r\n--- ABC Language Test Harness ---");
+
+  // TEST 1: Basic Assignment (Destination, Operation, Number)
+  runTest("Basic Numeric Assignment", "a:5\n", 'a', 5);
+
+  // TEST 2: Register to Register Assignment
+  runTest("Register Copy", "a:9\nb:a\n", 'b', 9);
+
+  // TEST 3: Math Addition
+  runTest("Simple Addition", "a:5\na:a+2\n", 'a', 7);
+
+  // TEST 4: Chained Operations
+  runTest("Implicit Destination Math", "b:2\na:b+3\n", 'a', 5); 
+
+  // TEST 5: Conditionals (True)
+  runTest("Conditional True", "a:1\na=1?b:9\n", 'b', 9);
+
+  // TEST 6: Conditionals (False)
+  runTest("Conditional False", "a:0\na=1?b:9\n", 'b', 0);
+
+  // TEST 7: Digital High Output
+  runHardwareTest("Digital Pin High", "13P H\n", 13, 1);
+
+  // TEST 8: Digital Low Output
+  runHardwareTest("Digital Pin Low", "9P L\n", 9, 0);
+
+  // TEST 9: Analog/PWM Output
+  runHardwareTest("Analog PWM Output", "5P:128\n", 5, 128);
+
+  // TEST 10: Servo Output
+  runHardwareTest("Servo Position", "2P S 90\n", 2, 90, true);
+
+  // TEST 11: Radix Switching (Base 16)
+  // Set radix to 16, then load hex "10" into 'a'. Expected decimal value: 16
+  runTest("Radix Hex", "r:16\na:10\n", 'a', 16);
+
+  // TEST 12: Radix Switching (Base 2)
+  // Set radix to 2, then load binary "101" into 'a'. Expected decimal value: 5
+  runTest("Radix Binary", "r:2\na:101\n", 'a', 5);
+
+  DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
+}
+
+void loop() {
+  //halt and look for input
+  String input = DEBUG_SERIAL.readStringUntil('\n'); // Wait for user input 
+  if (input.length() > 0) {
+    DEBUG_SERIAL.printf("Evaluating ABC code:\n%s\n", input.c_str());
+    evaluateABC(input.c_str());
+    DEBUG_SERIAL.println("Done evaluating.\n");
+  }
+}
