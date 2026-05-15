@@ -24,12 +24,12 @@ a-z	set SRC or DST to register. a is register 0. b is register 4. z is 100.
 	set to the starting address of the string in FLASH.
 	If the operation was already " when a new starting " is seen, 
 	put a " to the dest then enter text mode. "Push ""START""" prints Push "START"
-#	Converts the value of source to decimal digits and copies it to DST.
-	incrementing DST after each digit. 
+#	??? Converts the value of source to decimal digits and copies it to DST.
+	incrementing DST after each digit. Managed better by 'r' as radix?
 +	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
 	if there is no SRC, the NUM is used as the SRC. a+1 increments a.
 	maybe if last op was +, load 1 into NUM. a++ increments a.
--	set operation to add, pre operation to negate or not, and set carry
+-	set operation to subtract
 &	set operation to bitwise AND. a-&b ANDs a with NOT b. a&-b subtracts b from a (& is ignored)
 |	set operation to bitwise OR
 =	set compare type to equal
@@ -42,15 +42,20 @@ a-z	set SRC or DST to register. a is register 0. b is register 4. z is 100.
 		; >~ is less than or equal too. <~ is greater than or equal too. =~ is not equal
 	perhaps change to ` (single back tick) (ASCII value of '!' plus '=' less 63)
 ?	if. Skip to the next line if the comparison fails (not TRUE)& keep skipping indented lines.
-!	else. Skip to the next line if the comparison succeeded & keep skipping indented lines. 
+!	(or \?) else. Skip to the next line if the comparison succeeded & keep skipping indented lines. 
 (	parms. Prep for a function call by pushing parameters. 
 )	call. Call the function pointed to by DST by incrementing PCP and loading DST to PC.
 [	Start loop
-]	End loop
+]	End loop if true flag is not set.
 .	return. Process OP/SRC, decrement PCP.
 A	(Analog) set Port pin in DST to output PWM in SRC. e.g. P2A100
-	set Port pin in SRC to read analog values in e.g. i:2P1A
+	set Port pin in SRC to read analog values in e.g. i:2P1A.
+  Not available in hex mode. Use P1:2 or more instead? 
+  Read analog by default on pins set to input which support ADC?
 D	(Delay) DST microseconds between IO commands. Clears DST. e.g. 100DP0HLHL
+  Not available in hex mode. Use 'W' for wait instead.
+J	(Jump) move NUM lines ?
+
 K	(Local) set SRC or DST to the LCD/Keys. 
 	The actual value stored is 0x88
 	NUM is used to select the position?
@@ -60,6 +65,7 @@ T ?Torque set torqen to SRC for servo in DST. e.g. P1T50 sets torque of servo on
 M ?stepper Motor on <step_pin> <dir_pin> 
 V ?motion profile for the stepper. <accelleration>, <velocity limit>
 G ?goto. Move the stepper motor to the specified position.
+
 P	(Port) set SRC or DST to IO pins. The value stored will be 0x80-0x87. e.g. 2P1 is port 2 pin 1
 	NUM before P selects the port if more than 1 available. stored in the lower 3 bits of the value.
 	NUM after P selects the pin. These are 1 to 8, not 0 to 7 so that 0 can indicate the entire port.
@@ -70,7 +76,6 @@ L	(Low) set the Port pin(s) in DST to low. e.g. 2PL sets all pins on port 2 low.
 	When the pin is an input, H and L set or clear TRUE based on the pins value.
 U	(Up) set Port pin(s) in DST to inputs will internal pull-up
 W	wait. Delay for DST u seconds. Not implemented.
-J	(Jump) move NUM lines ?
 
 Unused (for now)
 $	
@@ -189,7 +194,17 @@ AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 
 // --- CORE ABC VIRTUAL MACHINE STATE ---
 long vars[26];      // Registers 'a' through 'z'
-#define radix vars['r'-'a'] // Alias 'r' register to radix
+#define radix vars['r'-'a'] // Alias 'r' to radix
+#define sp    vars['s'-'a'] // Alias 's' to stack pointer
+#define pc    vars['p'-'a'] // Alias 'p' to program counter
+
+long stack[256];            // The actual memory stack
+int frame_pointer = 0;      // Points to start of arguments in the current call
+int current_arg_count = 0;  // How many args in the current scope
+int call_depth = 0;         // Are we inside a subroutine?
+
+bool in_char_literal = false; // For parsing 'm'
+
 long num = 0;       // Numeric accumulator
 char dst = 0;       // Current Destination
 char op = 0;        // Current Operation
@@ -247,6 +262,18 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
 // This is where we will incrementally port the logic from abc.cpp
 
 // --- INTERPRETER STUB ---
+
+long* getVarPtr(char c) {
+  int regIndex = c - 'a';
+  // If we are in a function, and the letter's index is within our argument count,
+  // it points to the stack parameter instead of the global register!
+  if (call_depth > 0 && regIndex < current_arg_count) {
+    return &stack[frame_pointer + regIndex];
+  }
+  // Otherwise, it falls through to the global register.
+  return &vars[regIndex];
+}
+
 void doop() {
   if (op != 0) {
     if (op == ':') {
@@ -256,12 +283,12 @@ void doop() {
         // pinMode(dst, OUTPUT);
         // if (num > 1) analogWrite(dst, num); else digitalWrite(dst, num);
       } else {
-        vars[dst] = num; // Standard register assignment
+        *getVarPtr(dst + 'a') = num; // Standard register assignment
       }
     } else if (op == '+') {
-      vars[dst] += num;
+      *getVarPtr(dst + 'a') += num;
     } else if (op == '=') {
-      true_flag = (vars[dst] == num);
+      true_flag = (*getVarPtr(dst + 'a') == num);
     } else if (op == 'S') { // Servo Operation
       if (dst_is_pin) {
         mock_servos[dst] = num; // Write to mock servo
@@ -284,8 +311,59 @@ void processChar(char c) {
     return;
   }
 
-  // 1. Accumulate Numbers (Hex digits)
-// 1. Accumulate Numbers (Based on 'r' register radix)
+  // Single Quote Character Parsing
+  if (c == '\'') {
+    in_char_literal = !in_char_literal; // Toggle mode
+    return;
+  }
+  if (in_char_literal) {
+    num = c; // Grab the ASCII decimal value
+    return;
+  }
+
+  // Stack Operators
+  if (c == '(') {
+    // We are entering a call structure. (In a full implementation, we'd save the
+    // prior scope's arg_count here, but we'll keep it simple for this test)
+    current_arg_count = 0;
+    return;
+  }
+
+  if (c == ',') {
+    // Push the current accumulated number to the stack
+    stack[sp++] = num;
+    current_arg_count++;
+    
+    // Reset state to grab the next argument
+    num = 0; 
+    op = 0; 
+    src_dst = false; 
+    return;
+  }
+
+  if (c == ')') {
+    // Push the final argument
+    stack[sp++] = num;
+    current_arg_count++;
+
+    // MOCK HARDWARE FUNCTION CALL ('t' / 'T')
+    if (src == 't' - 'a') {
+      long device_type = stack[sp - current_arg_count]; // E.g., 'm' for motor
+      
+      // ... Initialize hardware here ...
+
+      // Clean up the stack
+      sp -= current_arg_count;
+      current_arg_count = 0;
+
+      // Return a Mock "Device Handle" (e.g., ID 99) into num, 
+      // ready to be assigned by the pending ':' operator!
+      num = 99; 
+    }
+    return;
+  }
+
+  // Accumulate Numbers (Based on 'r' register radix)
   if (c >= '0' && c <= '9') {
     num *= radix;
     num += (c - '0');
@@ -297,7 +375,7 @@ void processChar(char c) {
     return;
   }
 
-  // 2. Identify Variables / Registers (a-z)
+  // Identify Variables / Registers (a-z)
   if (c >= 'a' && c <= 'z') {
     int regIndex = c - 'a';
     if (!src_dst) { // Looking for destination
@@ -305,12 +383,12 @@ void processChar(char c) {
       src_dst = true; // Next variable is source
     } else {        // Looking for source
       src = regIndex;
-      num = vars[src]; // Load value into accumulator
+      num = *getVarPtr(src + 'a'); // Load value into accumulator
     }
     return;
   }
 
-// Hardware Pin Modifier ('P')
+  // Hardware Pin Modifier ('P')
   if (c == 'P') {
     if (!src_dst) { // Modifying destination
       dst = num;
@@ -336,7 +414,7 @@ void processChar(char c) {
     return;
   }
 
-  // 3. End of Line / Execution Trigger
+  // End of Line / Execution Trigger
   if (c == '\n' || c == '\r') {
     doop(); // Execute the final pending operation on the line!
 
@@ -346,7 +424,7 @@ void processChar(char c) {
     return;
   }
 
-  // 4. Handle Conditionals
+  // Handle Conditionals
   if (c == '?') {
     doop(); // Evaluate the condition first!
     
@@ -359,7 +437,7 @@ void processChar(char c) {
     return;
   }
 
-  // 5. If it's none of the above, it's likely an operator
+  // If it's none of the above, it's likely an operator
   if (c != ' ' && c != '\t') { 
     doop(); // Execute the PREVIOUS operation before loading the new one
     op = c;
@@ -468,6 +546,40 @@ void setup() {
   // Set radix to 2, then load binary "101" into 'a'. Expected decimal value: 5
   runTest("Radix Binary", "r:2\na:101\n", 'a', 5);
 
+  // TEST 13: Single Quote ASCII parsing
+  // Assign the ASCII value of 'm' (109) to 'a'
+  runTest("Single Quote ASCII", "a:'m'\n", 'a', 109);
+
+  // TEST 14: Comma Pushing & Stack Pointer Manipulation
+  // Push 10, 20 to stack. The 's' register (SP) should increment by 2.
+  runTest("Stack Pointer Update", "10, 20,\n", 's', 2);
+
+  // TEST 15: Mock Hardware Device Handle
+  // t is the hardware init function. 'm' is type motor. It returns handle 99 to 'a'.
+  runTest("Hardware Function Call", "a:t('m', 3, 4)\n", 'a', 99);
+
+  // TEST 16: Variable Parameter Shadowing
+  // We manually spoof entering a subroutine with 2 arguments already on the stack.
+  // 'a' should map to stack[0], and 'b' should map to stack[1]. 'c' maps to global.
+  testCount++;
+  for(int i=0; i<26; i++) vars[i] = 0;
+  stack[0] = 77; // Spoof Arg 1
+  stack[1] = 88; // Spoof Arg 2
+  sp = 2;
+  frame_pointer = 0;
+  current_arg_count = 2;
+  call_depth = 1; // SPOOF WE ARE INSIDE A FUNCTION
+  
+  // Try to copy 'a' to 'c'. If shadowing works, 'c' becomes 77, not 0!
+  evaluateABC("c:a\n"); 
+  if (vars['c'-'a'] == 77) {
+      Serial.printf("[PASS] Variable Parameter Shadowing\r\n");
+      passCount++;
+  } else {
+      Serial.printf("[FAIL] Variable Parameter Shadowing\r\n");
+  }
+  call_depth = 0; // reset
+  
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
 }
 
