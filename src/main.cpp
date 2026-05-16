@@ -191,7 +191,6 @@ void step_back() {
 AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 #endif
 
-
 // --- CORE ABC VIRTUAL MACHINE STATE ---
 long vars[26];      // Registers 'a' through 'z'
 #define radix vars['r'-'a'] // Alias 'r' to radix
@@ -204,21 +203,34 @@ int current_arg_count = 0;  // How many args in the current scope
 int call_depth = 0;         // Are we inside a subroutine?
 
 bool in_char_literal = false; // For parsing 'm'
+long num = 0;                 // Numeric accumulator
 
-long num = 0;       // Numeric accumulator
-char dst = 0;       // Current Destination
-char op = 0;        // Current Operation
-char src = 0;       // Current Source
+// The Tagged Union structure for dynamically typed targets!
+#define TYPE_NUM 0
+#define TYPE_REG 1
+#define TYPE_PIN 2
+#define TYPE_DEV 3
+
+union ABCState {
+  long raw;              // Allows a full 32-bit push/pop to the stack
+  struct {
+    int16_t value;       // Payload: register index, pin number, device ID
+    uint8_t type;        // TYPE_NUM, TYPE_REG, TYPE_PIN, TYPE_DEV
+    uint8_t arg_count;   // Free byte! Useful for storing arg counts later
+  } meta;
+};
+
+ABCState dst; // Current Destination
+ABCState src; // Current Source
+
+char op = 0;          // Current Operation
 bool src_dst = false; // False = looking for DST, True = looking for SRC
 bool true_flag = true; // For conditionals (?)
 bool skip_line = false; 
-bool dst_is_pin = false; // Flag: Is the current destination a physical pin?
-bool src_is_pin = false; // Flag: Is the current source a physical pin?
 
 // --- MOCK HARDWARE FOR TESTING ---
 long mock_pins[30];   // Stores digital (0/1) or PWM (>1) states
 long mock_servos[30]; // Stores servo angles
-
 
 void delayus(unsigned long us) {
   if (us>10000) { //can't delayMicroseconds() more than 16838
@@ -259,47 +271,52 @@ void rebootServo(int id, int mode) { //setup servo id number into mode.
 #endif
 
 // --- INTERPRETER STUB ---
-// This is where we will incrementally port the logic from abc.cpp
 
-// --- INTERPRETER STUB ---
-
-long* getVarPtr(char c) {
-  int regIndex = c - 'a';
-  // If we are in a function, and the letter's index is within our argument count,
-  // it points to the stack parameter instead of the global register!
+long* getVarPtr(int regIndex) {
+  // Shadow parameters if inside a function call
   if (call_depth > 0 && regIndex < current_arg_count) {
     return &stack[frame_pointer + regIndex];
   }
-  // Otherwise, it falls through to the global register.
   return &vars[regIndex];
 }
 
 void doop() {
   if (op != 0) {
+    long* target = nullptr;
+    
+    // Resolve the target pointer if the destination is a standard memory register
+    if (dst.meta.type == TYPE_REG) {
+      target = getVarPtr(dst.meta.value);
+    }
+
     if (op == ':') {
-      if (dst_is_pin) {
-        mock_pins[dst] = num; // Write to mock hardware
-        // REAL HARDWARE:
-        // pinMode(dst, OUTPUT);
-        // if (num > 1) analogWrite(dst, num); else digitalWrite(dst, num);
-      } else {
-        *getVarPtr(dst + 'a') = num; // Standard register assignment
-      }
+      if (dst.meta.type == TYPE_PIN) mock_pins[dst.meta.value] = num;
+      else if (target) *target = num;
     } else if (op == '+') {
-      *getVarPtr(dst + 'a') += num;
+      if (target) *target += num;
+    } else if (op == '-') {
+      if (target) *target -= num;
+    } else if (op == '&') {
+      if (target) *target &= num;
+    } else if (op == '|') {
+      if (target) *target |= num;
     } else if (op == '=') {
-      true_flag = (*getVarPtr(dst + 'a') == num);
-    } else if (op == 'S') { // Servo Operation
-      if (dst_is_pin) {
-        mock_servos[dst] = num; // Write to mock servo
-        // REAL HARDWARE: servo[dst].write(num);
-      }
+      if (target) true_flag = (*target == num);
+    } else if (op == '<') {
+      if (target) true_flag = (*target < num);
+    } else if (op == '>') {
+      if (target) true_flag = (*target > num);
+    } else if (op == '{') { // <=
+      if (target) true_flag = (*target <= num);
+    } else if (op == '}') { // >=
+      if (target) true_flag = (*target >= num);
+    } else if (op == 'S') { // Servo Output
+      if (dst.meta.type == TYPE_PIN) mock_servos[dst.meta.value] = num;
     }
     
-    // Clear source and number, but keep destination
+    // Clear source and number, but keep destination and operation
     num = 0;
-    src = 0;
-    src_is_pin = false; 
+    src.raw = 0; // The union zero-init clears type, value, and args simultaneously!
   }
 }
 
@@ -321,45 +338,51 @@ void processChar(char c) {
     return;
   }
 
-  // Stack Operators
+  // Stack Operators: Call Start
   if (c == '(') {
-    // We are entering a call structure. (In a full implementation, we'd save the
-    // prior scope's arg_count here, but we'll keep it simple for this test)
+    // Pack current VM execution state to the stack
+    long state_flags = (op << 8) | (src_dst ? 1 : 0);
+    stack[sp++] = dst.raw;
+    stack[sp++] = src.raw;
+    stack[sp++] = state_flags;
     current_arg_count = 0;
     return;
   }
 
+  // Stack Operators: Push Arg
   if (c == ',') {
-    // Push the current accumulated number to the stack
     stack[sp++] = num;
     current_arg_count++;
-    
-    // Reset state to grab the next argument
-    num = 0; 
-    op = 0; 
-    src_dst = false; 
+    num = 0; op = 0; src_dst = false; 
     return;
   }
 
+  // Stack Operators: Execute Call
   if (c == ')') {
-    // Push the final argument
     stack[sp++] = num;
     current_arg_count++;
 
-    // MOCK HARDWARE FUNCTION CALL ('t' / 'T')
-    if (src == 't' - 'a') {
-      long device_type = stack[sp - current_arg_count]; // E.g., 'm' for motor
-      
-      // ... Initialize hardware here ...
+    long ret_val = 0; 
 
-      // Clean up the stack
-      sp -= current_arg_count;
-      current_arg_count = 0;
-
-      // Return a Mock "Device Handle" (e.g., ID 99) into num, 
-      // ready to be assigned by the pending ':' operator!
-      num = 99; 
+    // MOCK HARDWARE FUNCTION CALL ('t')
+    if (src.meta.type == TYPE_REG && src.meta.value == ('t' - 'a')) {
+      long device_type = stack[sp - current_arg_count]; // E.g., 'm'
+      // ... Hardware Init ...
+      ret_val = 99; // Return device handle
     }
+
+    sp -= current_arg_count;
+    current_arg_count = 0; 
+
+    // Restore the VM state exactly as we left it!
+    long state_flags = stack[--sp];
+    src.raw = stack[--sp];
+    dst.raw = stack[--sp];
+
+    src_dst = (state_flags & 1) != 0;
+    op = (state_flags >> 8) & 0xFF;
+
+    num = ret_val; 
     return;
   }
 
@@ -379,11 +402,13 @@ void processChar(char c) {
   if (c >= 'a' && c <= 'z') {
     int regIndex = c - 'a';
     if (!src_dst) { // Looking for destination
-      dst = regIndex;
+      dst.meta.type = TYPE_REG;
+      dst.meta.value = regIndex;
       src_dst = true; // Next variable is source
-    } else {        // Looking for source
-      src = regIndex;
-      num = *getVarPtr(src + 'a'); // Load value into accumulator
+    } else {        
+      src.meta.type = TYPE_REG;
+      src.meta.value = regIndex;
+      num = *getVarPtr(regIndex); // Load value into accumulator
     }
     return;
   }
@@ -391,55 +416,63 @@ void processChar(char c) {
   // Hardware Pin Modifier ('P')
   if (c == 'P') {
     if (!src_dst) { // Modifying destination
-      dst = num;
-      dst_is_pin = true;
-      src_dst = true; // Now looking for op/source
-    } else {        // Modifying source
-      src = num;
-      src_is_pin = true;
-      // REAL HARDWARE: num = digitalRead(src); 
+      dst.meta.type = TYPE_PIN;
+      dst.meta.value = num;
+      src_dst = true; 
+    } else {        // Modifying source   
+      src.meta.type = TYPE_PIN;
+      src.meta.value = num;
+      // REAL HARDWARE: num = digitalRead(src.meta.value); 
     }
     num = 0; // Reset accumulator after using it for the pin number
     return;
   }
 
-  // Immediate Hardware Operations (High/Low)
+  // Immediate Hardware/State Operations
   if (c == 'H' || c == 'L') {
-    if (dst_is_pin) {
-      mock_pins[dst] = (c == 'H') ? 1 : 0;
+    if (dst.meta.type == TYPE_PIN) {
+      mock_pins[dst.meta.value] = (c == 'H') ? 1 : 0;
       // REAL HARDWARE: pinMode(dst, OUTPUT); digitalWrite(dst, mock_pins[dst]);
     }
     // Reset state since this executes immediately
-    num = 0; op = 0; src_dst = false; dst_is_pin = false;
+    num = 0; op = 0; src_dst = false; dst.raw = 0;
     return;
   }
 
-  // End of Line / Execution Trigger
-  if (c == '\n' || c == '\r') {
-    doop(); // Execute the final pending operation on the line!
-
-    // Reset state machine for the next line
-    num = 0; op = 0;
-    src_dst = false; dst_is_pin = false; src_is_pin = false;
+  // Toggle true_flag (Not operator)
+  if (c == '~') {
+    doop();
+    true_flag = !true_flag;
     return;
   }
 
   // Handle Conditionals
   if (c == '?') {
     doop(); // Evaluate the condition first!
-    
-    if (!true_flag) {
-      skip_line = true;
-    }
-    // Reset for the next statement on the same line
-    src_dst = false; 
-    op = 0; 
+    if (!true_flag) skip_line = true;
+    src_dst = false; op = 0; //reset state for next line
     return;
   }
 
-  // If it's none of the above, it's likely an operator
+  // Handle Inverted Conditionals (Else/If Not)
+  if (c == '!') {
+    doop(); 
+    if (true_flag) skip_line = true;
+    src_dst = false; op = 0; 
+    return;
+  }
+
+  // End of Line / Execution Trigger
+  if (c == '\n' || c == '\r') {
+    doop(); 
+    num = 0; op = 0; src_dst = false; 
+    dst.raw = 0; src.raw = 0; // Clean wipe!
+    return;
+  }
+
+  // If it's none of the above, it's likely a standard operator
   if (c != ' ' && c != '\t') { 
-    doop(); // Execute the PREVIOUS operation before loading the new one
+    doop(); 
     op = c;
   }
 }
@@ -454,12 +487,17 @@ void evaluateABC(const char* commands) {
 int testCount = 0;
 int passCount = 0;
 
+
 void resetTestState() {
-// Reset the VM state completely
   for(int i=0; i<26; i++) vars[i] = 0;
-  radix = 10; // Default to decimal!
-  num = 0; dst = 0; op = 0; src = 0;
-  src_dst = false; true_flag = true; skip_line = false;
+  radix = 10; 
+  num = 0; 
+  dst.raw = 0; 
+  src.raw = 0; 
+  op = 0; 
+  src_dst = false; 
+  true_flag = true; 
+  skip_line = false;
 }
 
 void runTest(const char* testName, const char* code, char checkReg, long expectedValue) {
@@ -582,6 +620,9 @@ void setup() {
   
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
 }
+
+//TODO: Add basic hardware simulation via a WOKWI filter driven by an "analog" PWM output and reading an analog input. 
+//      https://wokwi.com/projects/409325290405496833
 
 void loop() {
   //halt and look for input
