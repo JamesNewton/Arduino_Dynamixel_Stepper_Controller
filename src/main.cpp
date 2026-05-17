@@ -229,7 +229,7 @@ bool true_flag = true; // For conditionals (?)
 bool skip_line = false; 
 
 // --- MOCK HARDWARE FOR TESTING ---
-long mock_pins[30];   // Stores digital (0/1) or PWM (>1) states
+long pin_shadow[30];   // Stores digital (0/1) or PWM (>1) states
 long mock_servos[30]; // Stores servo angles
 
 void delayus(unsigned long us) {
@@ -281,43 +281,47 @@ long* getVarPtr(int regIndex) {
 }
 
 void doop() {
-  if (op != 0) {
-    long* target = nullptr;
-    
-    // Resolve the target pointer if the destination is a standard memory register
-    if (dst.meta.type == TYPE_REG) {
-      target = getVarPtr(dst.meta.value);
-    }
-
-    if (op == ':') {
-      if (dst.meta.type == TYPE_PIN) mock_pins[dst.meta.value] = num;
-      else if (target) *target = num;
-    } else if (op == '+') {
-      if (target) *target += num;
-    } else if (op == '-') {
-      if (target) *target -= num;
-    } else if (op == '&') {
-      if (target) *target &= num;
-    } else if (op == '|') {
-      if (target) *target |= num;
-    } else if (op == '=') {
-      if (target) true_flag = (*target == num);
-    } else if (op == '<') {
-      if (target) true_flag = (*target < num);
-    } else if (op == '>') {
-      if (target) true_flag = (*target > num);
-    } else if (op == '{') { // <=
-      if (target) true_flag = (*target <= num);
-    } else if (op == '}') { // >=
-      if (target) true_flag = (*target >= num);
-    } else if (op == 'S') { // Servo Output
-      if (dst.meta.type == TYPE_PIN) mock_servos[dst.meta.value] = num;
-    }
-    
-    // Clear source and number, but keep destination and operation
-    num = 0;
-    src.raw = 0; // The union zero-init clears type, value, and args simultaneously!
+  if (op == 0) return; // No operation to perform
+  long* target = nullptr;
+  
+  // Resolve the target pointer if the destination is a standard memory register
+  if (dst.meta.type == TYPE_REG) {
+    target = getVarPtr(dst.meta.value);
   }
+
+  switch (op) {
+case ':':
+      if (dst.meta.type == TYPE_PIN) {
+        pin_shadow[dst.meta.value] = num; // Restore mock tracking for the test harness
+        pinMode(dst.meta.value, OUTPUT);
+        // Basic distinction: 0/1 is digital, > 1 is PWM
+        if (num > 1) analogWrite(dst.meta.value, num);
+        else digitalWrite(dst.meta.value, num);
+      } else if (target) {
+        *target = num;
+      }
+      break;
+      
+    case '+': if (target) *target += num; break;
+    case '-': if (target) *target -= num; break;
+    case '&': if (target) *target &= num; break;
+    case '|': if (target) *target |= num; break;
+    case '=': if (target) true_flag = (*target == num); break;
+    case '<': if (target) true_flag = (*target < num); break;
+    case '>': if (target) true_flag = (*target > num); break;
+    case '{': if (target) true_flag = (*target <= num); break; // <=
+    case '}': if (target) true_flag = (*target >= num); break; // >=
+    
+    case 'S': // Servo Output
+      if (dst.meta.type == TYPE_PIN) {
+        mock_servos[dst.meta.value] = num;
+      }
+      break;
+  }
+  
+  // Clear source and number, but keep destination and operation
+  num = 0;
+  src.raw = 0; // The union zero-init clears type, value, and args simultaneously!
 }
 
 void processChar(char c) {
@@ -419,22 +423,36 @@ void processChar(char c) {
       dst.meta.type = TYPE_PIN;
       dst.meta.value = num;
       src_dst = true; 
-    } else {        // Modifying source   
+      num = 0; // Reset accumulator ONLY for the destination
+    } else {        // Modifying source        
       src.meta.type = TYPE_PIN;
       src.meta.value = num;
-      // REAL HARDWARE: num = digitalRead(src.meta.value); 
+      // REAL HARDWARE READ!
+      num = digitalRead(src.meta.value); 
+      // Do NOT reset num here, we need it for the operation!
     }
-    num = 0; // Reset accumulator after using it for the pin number
     return;
   }
 
-  // Immediate Hardware/State Operations
+  // Immediate Hardware/State Operations (H, L, I, U)
   if (c == 'H' || c == 'L') {
     if (dst.meta.type == TYPE_PIN) {
-      mock_pins[dst.meta.value] = (c == 'H') ? 1 : 0;
-      // REAL HARDWARE: pinMode(dst, OUTPUT); digitalWrite(dst, mock_pins[dst]);
+      pin_shadow[dst.meta.value] = (c == 'H') ? 1 : 0; 
+      pinMode(dst.meta.value, OUTPUT);
+      digitalWrite(dst.meta.value, (c == 'H') ? HIGH : LOW);
     }
-    // Reset state since this executes immediately
+    num = 0; op = 0; src_dst = false; dst.raw = 0;
+    return;
+  }
+
+  if (c == 'I') { // Input
+    if (dst.meta.type == TYPE_PIN) pinMode(dst.meta.value, INPUT);
+    num = 0; op = 0; src_dst = false; dst.raw = 0;
+    return;
+  }
+
+  if (c == 'U') { // Input Pull-Up (Changed from P to avoid collision)
+    if (dst.meta.type == TYPE_PIN) pinMode(dst.meta.value, INPUT_PULLUP);
     num = 0; op = 0; src_dst = false; dst.raw = 0;
     return;
   }
@@ -459,6 +477,13 @@ void processChar(char c) {
     doop(); 
     if (true_flag) skip_line = true;
     src_dst = false; op = 0; 
+    return;
+  }
+
+  // Immediate Hardware/State Operations (H, L, I, U, W)
+  if (c == 'W') { // Wait (Delay in microseconds)
+    delayus(num);
+    num = 0; op = 0; src_dst = false; dst.raw = 0;
     return;
   }
 
@@ -500,6 +525,22 @@ void resetTestState() {
   skip_line = false;
 }
 
+void printCodeIndented(const char* code) {
+  DEBUG_SERIAL.print("       Code: ");
+  while (*code) {
+    if (*code == '\n') {
+      DEBUG_SERIAL.print("\r\n");
+      if (*(code + 1) != '\0') {
+        DEBUG_SERIAL.print("             "); // Indent the next line
+      }
+    } else if (*code != '\r') {
+      DEBUG_SERIAL.print(*code);
+    }
+    code++;
+  }
+  if (*(code - 1) != '\n') DEBUG_SERIAL.print("\r\n");
+}
+
 void runTest(const char* testName, const char* code, char checkReg, long expectedValue) {
   testCount++;
   
@@ -515,8 +556,7 @@ void runTest(const char* testName, const char* code, char checkReg, long expecte
     passCount++;
   } else {
     DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
-    // code string already contains \n, adding \r to align the next lines
-    DEBUG_SERIAL.printf("       Code: %s\r", code); 
+    printCodeIndented(code);
     DEBUG_SERIAL.printf("       Expected register '%c' to be %ld, but got %ld\r\n", checkReg, expectedValue, actualValue);
   }
 }
@@ -529,7 +569,7 @@ void runHardwareTest(const char* testName, const char* code, int checkPin, long 
 
   evaluateABC(code);
 
-  long actualValue = isServo ? mock_servos[checkPin] : mock_pins[checkPin];
+  long actualValue = isServo ? mock_servos[checkPin] : pin_shadow[checkPin];
   
   if (actualValue == expectedValue) {
     Serial.printf("[PASS] %s\r\n", testName);
@@ -617,6 +657,31 @@ void setup() {
       Serial.printf("[FAIL] Variable Parameter Shadowing\r\n");
   }
   call_depth = 0; // reset
+
+  // --- HARDWARE IN THE LOOP (HIL) TESTS ---
+  // Note: Requires Wokwi diagram connecting GPIO 2 to GPIO 3. Let's check:
+  pinMode(2, OUTPUT);
+  pinMode(3, INPUT);
+  digitalWrite(2, HIGH);
+  delay(10); 
+  if (digitalRead(3) == HIGH) {
+    DEBUG_SERIAL.println("[PASS] Native C++ Wiring Check (GP2 -> GP3 connected)");
+  } else {
+    DEBUG_SERIAL.println("[FAIL] Simulator not setup! Please check diagram.json.");
+  }
+  digitalWrite(2, LOW); // Reset
+
+  // 1. Set Pin 3 to Input
+  evaluateABC("3P I\n");
+
+  // 2. Set Pin 2 to High, wait 1000us (1ms), then read Pin 3 into 'a'
+  runTest("HIL: GPIO High Read", "2P H\n1000 W\na:3P\n", 'a', 1);
+
+  // 3. Set Pin 2 to Low, wait 1000us (1ms), then read Pin 3 into 'b'
+  runTest("HIL: GPIO Low Read", "2P L\n1000 W\nb:3P\n", 'b', 0);
+  
+  // 4. Test Assignment digital write (0/1) instead of H/L
+  runTest("HIL: GPIO Assign High", "2P:1\n1000 W\nc:3P\n", 'c', 1);
   
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
 }
