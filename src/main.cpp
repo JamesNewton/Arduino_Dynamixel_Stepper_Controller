@@ -7,18 +7,19 @@ Goals
 - The main pattern is: Destination, [Operation, Source ...], e.g. a=b+c-d. 
 - The regular keywords in a language are single characters, making use of punctuation
 
-0-9 A-F	nibble swap NUM, load hex digit into low nibble of NUM. 
-	Conversion from/to decimal is too much? Maybe not?
-:	Copy operation, e.g. "define"
-a-z	set SRC or DST to register. a is register 0. b is register 4. z is 100.
-	a:5 sets register 0 to 5. a:b copies register 4 to register 0.
+0-9 a-f Accumulate base-10 digits into num (or base-16/etc. depending on the r register).
+a-z Variables/Registers (SRC or DST). Some registers have special meanings:
+   r Radix (Default 10). Digits are stolen from registers. e.g. a-f are values 10-15 if r:16 and so on. 
+   p Program Counter aka PC
+   s Stack Pointer aka SP.
+  Might not be contiguous in the array. e.g. while a is 0. b could be register 4, c 8, etc..
+:	Copy operation, e.g. "define" a:5 sets register 0 to 5. a:b copies the value of b to register 0.
 	NUM is added to the register address first. 3a is the third byte after the start of a. 
-	Register 125 is 7Da or 19z (19h=25d, z=100, +25=125) SRC, DST, etc start at 5z.
-	After DST is loaded, SRC/DST is set and the next address is loaded to SRC.
 @	index. Replace SRC or DST with the value at that address
 	 and clear op. This sets the stage for another op and SRC.
 	e.g. b@a sets the DST to the address of b plus the value of a.
 	If the SRC is a port or port pin, read that value in. 
+' (Single Quote) ASCII literal. Next character is its numeric decimal value ('A' is 65).
 "	(Quote) Text. Each following char is copied to the DST until the ending quote.
 	If the DST is a variable, the chars are actually copied into FLASH and the var is
 	set to the starting address of the string in FLASH.
@@ -43,39 +44,39 @@ a-z	set SRC or DST to register. a is register 0. b is register 4. z is 100.
 	perhaps change to ` (single back tick) (ASCII value of '!' plus '=' less 63)
 ?	if. Skip to the next line if the comparison fails (not TRUE)& keep skipping indented lines.
 !	(or \?) else. Skip to the next line if the comparison succeeded & keep skipping indented lines. 
-(	parms. Prep for a function call by pushing parameters. 
-)	call. Call the function pointed to by DST by incrementing PCP and loading DST to PC.
+(	parms. Prep for a function call by pushing state.
+, push accumulated NUM as an argument to the stack and increment SP. Clear NUM for the next 
+)	call. Push final argument, push PC, and call the function pointed to by DST by DST to PC.
 [	Start loop
 ]	End loop if true flag is not set.
-.	return. Process OP/SRC, decrement PCP.
-A	(Analog) set Port pin in DST to output PWM in SRC. e.g. P2A100
-	set Port pin in SRC to read analog values in e.g. i:2P1A.
-  Not available in hex mode. Use P1:2 or more instead? 
-  Read analog by default on pins set to input which support ADC?
-D	(Delay) DST microseconds between IO commands. Clears DST. e.g. 100DP0HLHL
-  Not available in hex mode. Use 'W' for wait instead.
+.	return. Cleanup stack, restore PC.
+P	(PWM) set Pin in DST to output PWM in SRC. e.g. 2P100
+A	set Port pin in SRC to read analog values in e.g. a:2A.
+D D)evice. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details.
 J	(Jump) move NUM lines ?
-
-K	(Local) set SRC or DST to the LCD/Keys. 
-	The actual value stored is 0x88
-	NUM is used to select the position?
-S	(Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. P1S90
+R	(RC Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. 1R90
 T	(Terminal) set SRC or DST to the Serial port. 0x89
-T ?Torque set torqen to SRC for servo in DST. e.g. P1T50 sets torque of servo on port 1 to 50%
-M ?stepper Motor on <step_pin> <dir_pin> 
-V ?motion profile for the stepper. <accelleration>, <velocity limit>
-G ?goto. Move the stepper motor to the specified position.
-
-P	(Port) set SRC or DST to IO pins. The value stored will be 0x80-0x87. e.g. 2P1 is port 2 pin 1
-	NUM before P selects the port if more than 1 available. stored in the lower 3 bits of the value.
-	NUM after P selects the pin. These are 1 to 8, not 0 to 7 so that 0 can indicate the entire port.
-I	(In) set the Port or Port pin in SRC to an Input. E.g. a:2P7I@ reads port 2 pin 7 into a
-O	(Out) set the Port or Port pin in DST to an Output (Can't H or L just do this?)
-H	(High) set the Port pin(s) in DST to high. e.g. P1H sets port 0, pin 1 (the second pin) high.
-L	(Low) set the Port pin(s) in DST to low. e.g. 2PL sets all pins on port 2 low.
+I	(In) set the Port or Port pin in SRC to an Input. E.g. a:7I reads pin 7 ADC into a
+H	(High) set the Pin in DST to high. e.g. 1H sets pin 1 high.
+L	(Low) set the Pin in DST to low.
 	When the pin is an input, H and L set or clear TRUE based on the pins value.
-U	(Up) set Port pin(s) in DST to inputs will internal pull-up
-W	wait. Delay for DST u seconds. Not implemented.
+U	(Up) set Pin in DST to inputs will internal pull-up
+W	wait. Delay for DST u seconds between IO commands. Clears DST. e.g. 100DP0HLHL
+
+Devices: These are the mnemonic character literals passed to the D (Device) 
+function to allocate and configure hardware peripherals.:
+'S' : Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
+'E' : Quadrature Encoder. Arguments: (Type, PinA, PinB).
+'D' : Dynamixel Servo. Arguments: (Type, ID, BaudRate).
+'X' : Serial/UART. Arguments: (Type, TxPin, RxPin, BaudRate).
+'C' : I2C Bus. Arguments: (Type, SclPin, SdaPin).
+'r' : SPI Bus. Arguments: (Type, MisoPin, MosiPin, SckPin).
+'O' : Digital Output (Type, Pin, Value) or use H, L. 
+'i' : Digital Input (Type, Pin, Pull) or use I, or U.
+'P' : PWM Output (Type, Pin, Value) or use P.
+'a' : Analog Input / ADC (Type, Pin) or use A.
+'R' : RC Servo (Type, Pin, Angle) or use S.
+
 
 Unused (for now)
 $	
