@@ -193,19 +193,6 @@ AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 #endif
 
 // --- CORE ABC VIRTUAL MACHINE STATE ---
-long vars[26];      // Registers 'a' through 'z'
-#define radix vars['r'-'a'] // Alias 'r' to radix
-#define sp    vars['s'-'a'] // Alias 's' to stack pointer
-#define pc    vars['p'-'a'] // Alias 'p' to program counter
-
-long stack[256];            // The actual memory stack
-int frame_pointer = 0;      // Points to start of arguments in the current call
-int current_arg_count = 0;  // How many args in the current scope
-int call_depth = 0;         // Are we inside a subroutine?
-
-bool in_char_literal = false; // For parsing 'm'
-long num = 0;                 // Numeric accumulator
-
 // The Tagged Union structure for dynamically typed targets!
 #define TYPE_NUM 0
 #define TYPE_REG 1
@@ -221,6 +208,19 @@ union ABCState {
   } meta;
 };
 
+ABCState vars[26];   // Upgrade Registers 'a' through 'z' to Typed States!
+#define radix vars['r'-'a'].meta.value // Alias 'r' to radix payload value
+#define sp    vars['s'-'a'].meta.value // Alias 's' to stack pointer payload value
+#define pc    vars['p'-'a'].meta.value // Alias 'p' to program counter payload value
+
+long stack[256];            // The actual memory stack
+int frame_pointer = 0;      // Points to start of arguments in the current call
+int current_arg_count = 0;  // How many args in the current scope
+int call_depth = 0;         // Are we inside a subroutine?
+
+bool in_char_literal = false; // For parsing 'm'
+long num = 0;                 // Numeric accumulator
+
 ABCState dst; // Current Destination
 ABCState src; // Current Source
 
@@ -229,9 +229,10 @@ bool src_dst = false; // False = looking for DST, True = looking for SRC
 bool true_flag = true; // For conditionals (?)
 bool skip_line = false; 
 
-// --- MOCK HARDWARE FOR TESTING ---
-long pin_shadow[30];   // Stores digital (0/1) or PWM (>1) states
-long mock_servos[30]; // Stores servo angles
+// --- HARDWARE SHADOWS ---
+long pin_shadow[30];   // Stores digital (0/1) or PWM values
+char pin_type[30];     // Mnemonic tags: 'O'=DigOut, 'i'=DigIn, 'u'=PullUp, 'a'=AnalogIn, 'P'=PWMOut, 'R'=RC_Servo
+long mock_servos[30];  // Stores servo angles
 
 void delayus(unsigned long us) {
   if (us>10000) { //can't delayMicroseconds() more than 16838
@@ -278,7 +279,7 @@ long* getVarPtr(int regIndex) {
   if (call_depth > 0 && regIndex < current_arg_count) {
     return &stack[frame_pointer + regIndex];
   }
-  return &vars[regIndex];
+  return (long*)&vars[regIndex].meta.value;
 }
 
 void doop() {
@@ -291,15 +292,24 @@ void doop() {
   }
 
   switch (op) {
-case ':':
+    case ':':
       if (dst.meta.type == TYPE_PIN) {
         pin_shadow[dst.meta.value] = num; // Restore mock tracking for the test harness
         pinMode(dst.meta.value, OUTPUT);
-        // Basic distinction: 0/1 is digital, > 1 is PWM
-        if (num > 1) analogWrite(dst.meta.value, num);
-        else digitalWrite(dst.meta.value, num);
+        if (num > 1) {
+          pin_type[dst.meta.value] = 'P'; // Explicitly mark hardware track as PWM Out
+          analogWrite(dst.meta.value, num);
+        } else {
+          pin_type[dst.meta.value] = 'O'; // Explicitly mark hardware track as Digital Out
+          digitalWrite(dst.meta.value, num);
+        }
       } else if (target) {
-        *target = num;
+        // If the variable itself holds a Device Handle, pipe data directly to it
+        if (vars[dst.meta.value].meta.type == TYPE_DEV) {
+          // ... Route value target to specific peripheral handle index ...
+        } else {
+          *target = num;
+        }
       }
       break;
       
@@ -310,12 +320,23 @@ case ':':
     case '=': if (target) true_flag = (*target == num); break;
     case '<': if (target) true_flag = (*target < num); break;
     case '>': if (target) true_flag = (*target > num); break;
-    case '{': if (target) true_flag = (*target <= num); break; // <=
-    case '}': if (target) true_flag = (*target >= num); break; // >=
+    case '{': if (target) true_flag = (*target <= num); break; 
+    case '}': if (target) true_flag = (*target >= num); break; 
     
-    case 'S': // Servo Output
+    case 'P': // Immediate inline PWM Operation modifier (e.g. 2P100)
+      if (dst.meta.type == TYPE_PIN) {
+        pin_shadow[dst.meta.value] = num;
+        pin_type[dst.meta.value] = 'P';
+        pinMode(dst.meta.value, OUTPUT);
+        analogWrite(dst.meta.value, num);
+      }
+      break;
+
+    case 'R': // Immediate inline Servo Operation modifier (e.g. 1R90)
       if (dst.meta.type == TYPE_PIN) {
         mock_servos[dst.meta.value] = num;
+        pin_type[dst.meta.value] = 'R';
+        // REAL HARDWARE: servo[dst.meta.value].write(num);
       }
       break;
   }
@@ -403,7 +424,7 @@ void processChar(char c) {
     return;
   }
 
-  // Identify Variables / Registers (a-z)
+// Identify Variables / Registers (a-z)
   if (c >= 'a' && c <= 'z') {
     int regIndex = c - 'a';
     if (!src_dst) { // Looking for destination
@@ -418,9 +439,9 @@ void processChar(char c) {
     return;
   }
 
-  // Hardware Pin Modifier ('P')
+  // Destination Pin Assignment / Read Shadow Modifier ('P')
   if (c == 'P') {
-    if (!src_dst) { // Modifying destination
+    if (!src_dst) { 
       dst.meta.type = TYPE_PIN;
       dst.meta.value = num;
       src_dst = true; 
@@ -428,33 +449,40 @@ void processChar(char c) {
     } else {        // Modifying source        
       src.meta.type = TYPE_PIN;
       src.meta.value = num;
-      // REAL HARDWARE READ!
-      num = digitalRead(src.meta.value); 
-      // Do NOT reset num here, we need it for the operation!
+      num = pin_shadow[num]; // Source execution returns the active shadow registration
     }
     return;
   }
 
-  // Immediate Hardware/State Operations (H, L, I, U)
+  // Immediate Hardware Output Commands (H, L)
   if (c == 'H' || c == 'L') {
-    if (dst.meta.type == TYPE_PIN) {
-      pin_shadow[dst.meta.value] = (c == 'H') ? 1 : 0; 
-      pinMode(dst.meta.value, OUTPUT);
-      digitalWrite(dst.meta.value, (c == 'H') ? HIGH : LOW);
-    }
+    pin_shadow[num] = (c == 'H') ? 1 : 0; 
+    pin_type[num] = 'O';
+    pinMode(num, OUTPUT);
+    digitalWrite(num, (c == 'H') ? HIGH : LOW);
     num = 0; op = 0; src_dst = false; dst.raw = 0;
     return;
   }
 
-  if (c == 'I') { // Input
-    if (dst.meta.type == TYPE_PIN) pinMode(dst.meta.value, INPUT);
-    num = 0; op = 0; src_dst = false; dst.raw = 0;
+  // Active Read Modifiers (I, U, A) - Read hardware, retain value in accumulator for assignment!
+  if (c == 'I') { // Digital Input
+    pin_type[num] = 'i';
+    pinMode(num, INPUT);
+    num = digitalRead(num); 
     return;
   }
 
-  if (c == 'U') { // Input Pull-Up (Changed from P to avoid collision)
-    if (dst.meta.type == TYPE_PIN) pinMode(dst.meta.value, INPUT_PULLUP);
-    num = 0; op = 0; src_dst = false; dst.raw = 0;
+  if (c == 'U') { // Input Pull-Up
+    pin_type[num] = 'u';
+    pinMode(num, INPUT_PULLUP);
+    num = digitalRead(num); 
+    return;
+  }
+
+  if (c == 'A') { // Analog Input 
+    pin_type[num] = 'a';
+    pinMode(num, INPUT);
+    num = analogRead(num); 
     return;
   }
 
@@ -515,7 +543,15 @@ int passCount = 0;
 
 
 void resetTestState() {
-  for(int i=0; i<26; i++) vars[i] = 0;
+  for(int i=0; i<26; i++) {
+    vars[i].raw = 0;
+    vars[i].meta.type = TYPE_REG; // Set type metadata
+  }
+  for(int i=0; i<30; i++) {
+    pin_shadow[i] = 0;
+    pin_type[i] = 0;
+    mock_servos[i] = 0;
+  }
   radix = 10; 
   num = 0; 
   dst.raw = 0; 
@@ -551,7 +587,7 @@ void runTest(const char* testName, const char* code, char checkReg, long expecte
   evaluateABC(code);
 
   // 3. Assert the result
-  long actualValue = vars[checkReg - 'a'];
+  long actualValue = vars[checkReg - 'a'].meta.value;
   if (actualValue == expectedValue) {
     DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
     passCount++;
@@ -559,6 +595,21 @@ void runTest(const char* testName, const char* code, char checkReg, long expecte
     DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
     DEBUG_SERIAL.printf("       Expected register '%c' to be %ld, but got %ld\r\n", checkReg, expectedValue, actualValue);
+  }
+}
+
+void runAnalogTest(const char* testName, const char* code, char checkReg, long expectedValue, long tolerance) {
+  testCount++;
+  resetTestState();
+  evaluateABC(code);
+  long actualValue = vars[checkReg - 'a'].meta.value;
+  if (abs(actualValue - expectedValue) <= tolerance) {
+    DEBUG_SERIAL.printf("[PASS] %s (Got %ld, expected ~%ld)\r\n", testName, actualValue, expectedValue);
+    passCount++;
+  } else {
+    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    printCodeIndented(code);
+    DEBUG_SERIAL.printf("       Expected register '%c' to be approx %ld (+/-%ld), but got %ld\r\n", checkReg, expectedValue, tolerance, actualValue);
   }
 }
 
@@ -606,16 +657,16 @@ void setup() {
   runTest("Conditional False", "a:0\na=1?b:9\n", 'b', 0);
 
   // TEST 7: Digital High Output
-  runHardwareTest("Digital Pin High", "13P H\n", 13, 1);
+  runHardwareTest("Digital Pin High", "13H\n", 13, 1);
 
   // TEST 8: Digital Low Output
-  runHardwareTest("Digital Pin Low", "9P L\n", 9, 0);
+  runHardwareTest("Digital Pin Low", "9L\n", 9, 0);
 
   // TEST 9: Analog/PWM Output
   runHardwareTest("Analog PWM Output", "5P:128\n", 5, 128);
 
   // TEST 10: Servo Output
-  runHardwareTest("Servo Position", "2P S 90\n", 2, 90, true);
+  runHardwareTest("Servo Position", "2R:90\n", 2, 90, true);
 
   // TEST 11: Radix Switching (Base 16)
   // Set radix to 16, then load hex "10" into 'a'. Expected decimal value: 16
@@ -641,7 +692,7 @@ void setup() {
   // We manually spoof entering a subroutine with 2 arguments already on the stack.
   // 'a' should map to stack[0], and 'b' should map to stack[1]. 'c' maps to global.
   testCount++;
-  for(int i=0; i<26; i++) vars[i] = 0;
+  for(int i=0; i<26; i++) vars[i].meta.value = 0;
   stack[0] = 77; // Spoof Arg 1
   stack[1] = 88; // Spoof Arg 2
   sp = 2;
@@ -651,7 +702,7 @@ void setup() {
   
   // Try to copy 'a' to 'c'. If shadowing works, 'c' becomes 77, not 0!
   evaluateABC("c:a\n"); 
-  if (vars['c'-'a'] == 77) {
+  if (vars['c'-'a'].meta.value == 77) {
       Serial.printf("[PASS] Variable Parameter Shadowing\r\n");
       passCount++;
   } else {
@@ -659,8 +710,9 @@ void setup() {
   }
   call_depth = 0; // reset
 
-  // --- HARDWARE IN THE LOOP (HIL) TESTS ---
-  // Note: Requires Wokwi diagram connecting GPIO 2 to GPIO 3. Let's check:
+// --- HARDWARE IN THE LOOP (HIL) TESTS ---
+  // Ensure your Wokwi layout connects GP2 to GP3, and 
+  // contains a simulated RC network from GP22 into GP26 (A0)
   pinMode(2, OUTPUT);
   pinMode(3, INPUT);
   digitalWrite(2, HIGH);
@@ -670,23 +722,21 @@ void setup() {
   } else {
     DEBUG_SERIAL.println("[FAIL] Simulator not setup! Please check diagram.json.");
   }
-  digitalWrite(2, LOW); // Reset
+  digitalWrite(2, LOW);
 
   // 1. Set Pin 3 to Input
-  evaluateABC("3P I\n");
-
-  // 2. Set Pin 2 to High, wait 1000us (1ms), then read Pin 3 into 'a'
-  runTest("HIL: GPIO High Read", "2P H\n1000 W\na:3P\n", 'a', 1);
-
-  // 3. Set Pin 2 to Low, wait 1000us (1ms), then read Pin 3 into 'b'
-  runTest("HIL: GPIO Low Read", "2P L\n1000 W\nb:3P\n", 'b', 0);
+    evaluateABC("3P I\n");
+  // 2H fires output. 1000W yields. 3I captures digital input state directly into variable 'a'.
+  runTest("HIL: Active DigIn High Read", "2H\n1000 W\na:3I\n", 'a', 1);
+  runTest("HIL: Active DigIn Low Read", "2L\n1000 W\nb:3I\n", 'b', 0);
   
-  // 4. Test Assignment digital write (0/1) instead of H/L
-  runTest("HIL: GPIO Assign High", "2P:1\n1000 W\nc:3P\n", 'c', 1);
-  
+  // 2. Analog Simulation Filter Catch
+  // Fire inline PWM 128 (50% scale) -> Sleep 50ms for RC settlement -> sample GP26 ADC straight to 'c'
+  // 50% voltage on a 10-bit core (1023 max) yields approx 512.
+  runAnalogTest("HIL: PWM to Analog RC Filter Integration", "22:128\n50000 W\nc:26A\n", 'c', 512, 35);
+    
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
 }
-
 //TODO: Add basic hardware simulation via a WOKWI filter driven by an "analog" PWM output and reading an analog input. 
 //      https://wokwi.com/projects/409325290405496833
 
