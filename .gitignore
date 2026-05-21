@@ -6,6 +6,8 @@
 # VSCode settings (optional, but recommended)
 .vscode/
 
+# wokwi files
+wokwi-api.h
 # Ignore compiled files
 *.o
 *.elf
