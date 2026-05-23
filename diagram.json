@@ -3,12 +3,21 @@
   "author": "Anonymous maker",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-pi-pico", "id": "pico", "top": -108.85, "left": -102.05, "attrs": {} }
+    { "type": "board-pi-pico", "id": "pico", "top": -108.85, "left": -102.05, "attrs": {} },
+    {
+      "type": "chip-analog-rcfilter",
+      "id": "chip1",
+      "top": 0,
+      "left": 50,
+      "attrs": { "R": "10", "Rexp": "2", "C": "0.1", "Cexp": "-3" }
+    }
  
   ],
   "connections": [
-    [ "pico:GP2", "pico:GP3", "green", [ "h-19.2", "v9.6" ] ],
-    [ "pico:GP26", "pico:GP22", "green", [ "h19.51", "v19.2" ] ]
+    [ "chip1:OUT", "pico:GP26", "orange", [ "h11.41", "v-20" ] ],
+    [ "chip1:IN", "pico:GP22", "yellow", [ "h-38.4", "v0", "h-32.8" ] ],
+    [ "pico:GND.5", "chip1:GND", "black", [ "v-5.2", "h48" ] ],
+    [ "pico:GP2", "pico:GP3", "green", [ "h-19.2", "v9.6" ] ]
   ],
   "dependencies": {}
 }

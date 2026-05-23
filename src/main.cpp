@@ -733,19 +733,23 @@ void setup() {
   // 2. Analog Simulation Filter Catch
   // Fire inline PWM 128 (50% scale) -> Sleep 50ms for RC settlement -> sample GP26 ADC straight to 'c'
   // 50% voltage on a 10-bit core (1023 max) yields approx 512.
-  runAnalogTest("HIL: PWM to Analog RC Filter Integration", "22:128\n50000 W\nc:26A\n", 'c', 512, 35);
+  runAnalogTest("HIL: PWM to Analog RC Filter Integration", "22:128\n50000000 W\nc:26A\n", 'c', 512, 35);
     
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
+  analogWrite(22,126); 
 }
 //TODO: Add basic hardware simulation via a WOKWI filter driven by an "analog" PWM output and reading an analog input. 
 //      https://wokwi.com/projects/409325290405496833
 
 void loop() {
+  int analogValue = analogRead(26);
+  DEBUG_SERIAL.println(analogValue);
+  delay(10);
   //halt and look for input
-  String input = DEBUG_SERIAL.readStringUntil('\n'); // Wait for user input 
-  if (input.length() > 0) {
-    DEBUG_SERIAL.printf("Evaluating ABC code:\n%s\n", input.c_str());
-    evaluateABC(input.c_str());
-    DEBUG_SERIAL.println("Done evaluating.\n");
-  }
+  // String input = DEBUG_SERIAL.readStringUntil('\n'); // Wait for user input 
+  // if (input.length() > 0) {
+  //   DEBUG_SERIAL.printf("Evaluating ABC code:\n%s\n", input.c_str());
+  //   evaluateABC(input.c_str());
+  //   DEBUG_SERIAL.println("Done evaluating.\n");
+  // }
 }

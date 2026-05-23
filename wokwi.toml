@@ -2,3 +2,7 @@
 version = 1
 firmware = ".pio/build/pico/firmware.uf2"
 elf = ".pio/build/pico/firmware.elf"
+
+[[chip]]
+name = 'analog-rcfilter' # This maps to "chip-analog-rcfilter" in diagram.json
+binary = 'sim_chips/analog_rcfilter.chip.wasm' 
