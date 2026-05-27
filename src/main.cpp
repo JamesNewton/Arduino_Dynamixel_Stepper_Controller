@@ -235,9 +235,9 @@ char pin_type[30];     // Mnemonic tags: 'O'=DigOut, 'i'=DigIn, 'u'=PullUp, 'a'=
 long mock_servos[30];  // Stores servo angles
 
 void delayus(unsigned long us) {
-  if (us>10000) { //can't delayMicroseconds() more than 16838
-    delay(us/10000);
-    us=us % 10000;
+  if (us>1000) { //can't delayMicroseconds() more than 16838
+    delay(us/1000);
+    us=us % 1000;
     }
   delayMicroseconds(us);
   }
@@ -511,6 +511,14 @@ void processChar(char c) {
 
   // Immediate Hardware/State Operations (H, L, I, U, W)
   if (c == 'W') { // Wait (Delay in microseconds)
+    // long ms = num/1000;
+    // long us = num%1000;
+    // while(ms > 0) {
+    //   int analogValue = analogRead(26);
+    //   DEBUG_SERIAL.println(analogValue);
+    //   delay(100);
+    //   ms -= 100;
+    // }
     delayus(num);
     num = 0; op = 0; src_dst = false; dst.raw = 0;
     return;
@@ -604,12 +612,16 @@ void runAnalogTest(const char* testName, const char* code, char checkReg, long e
   evaluateABC(code);
   long actualValue = vars[checkReg - 'a'].meta.value;
   if (abs(actualValue - expectedValue) <= tolerance) {
-    DEBUG_SERIAL.printf("[PASS] %s (Got %ld, expected ~%ld)\r\n", testName, actualValue, expectedValue);
+    DEBUG_SERIAL.printf("[PASS] %s (Got %ld, expected ~%ld+/-±%ld)\r\n"
+      , testName, actualValue, expectedValue, tolerance
+    );
     passCount++;
   } else {
     DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       Expected register '%c' to be approx %ld (+/-%ld), but got %ld\r\n", checkReg, expectedValue, tolerance, actualValue);
+    DEBUG_SERIAL.printf("       Expected register '%c' to be approx %ld (±%ld), but got %ld\r\n"
+      , checkReg, expectedValue, tolerance, actualValue
+    );
   }
 }
 
@@ -627,8 +639,9 @@ void runHardwareTest(const char* testName, const char* code, int checkPin, long 
     Serial.printf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    Serial.printf("[FAIL] %s\r\n       Code: %s\r       Expected Pin %d to be %ld, but got %ld\r\n", 
-                  testName, code, checkPin, expectedValue, actualValue);
+    Serial.printf("[FAIL] %s\r\n       Code: %s\r       Expected Pin %d to be %ld, but got %ld\r\n"
+      ,testName, code, checkPin, expectedValue, actualValue
+    );
   }
 }
 
@@ -732,8 +745,9 @@ void setup() {
   
   // 2. Analog Simulation Filter Catch
   // Fire inline PWM 128 (50% scale) -> Sleep 50ms for RC settlement -> sample GP26 ADC straight to 'c'
-  // 50% voltage on a 10-bit core (1023 max) yields approx 512.
-  runAnalogTest("HIL: PWM to Analog RC Filter Integration", "22:128\n50000000 W\nc:26A\n", 'c', 512, 35);
+  // 50% voltage on a 10-bit core (1023 max) yields approx 512. 1/4 is about 256.
+  runAnalogTest("HIL: PWM to Analog Filter 1", "22P:127\n500000W\nc:26A\n", 'c', 512, 20);
+  runAnalogTest("HIL: PWM to Analog Filter 2", "22P:63\n500000W\nc:26A\n", 'c', 256, 10);
     
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   analogWrite(22,126); 
@@ -742,14 +756,12 @@ void setup() {
 //      https://wokwi.com/projects/409325290405496833
 
 void loop() {
-  int analogValue = analogRead(26);
-  DEBUG_SERIAL.println(analogValue);
-  delay(10);
-  //halt and look for input
-  // String input = DEBUG_SERIAL.readStringUntil('\n'); // Wait for user input 
-  // if (input.length() > 0) {
-  //   DEBUG_SERIAL.printf("Evaluating ABC code:\n%s\n", input.c_str());
-  //   evaluateABC(input.c_str());
-  //   DEBUG_SERIAL.println("Done evaluating.\n");
-  // }
+  // halt and look for input
+  String input = DEBUG_SERIAL.readStringUntil('\n'); // Wait for user input 
+  if (input.length() > 0) {
+    DEBUG_SERIAL.printf("Evaluating ABC code:\n%s\n", input.c_str());
+    evaluateABC(input.c_str());
+    DEBUG_SERIAL.println("Done evaluating.\n");
+  }
+  delay(1); // Small delay to avoid busy looping
 }
