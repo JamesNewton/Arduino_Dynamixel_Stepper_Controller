@@ -7,14 +7,14 @@ Goals
 - The main pattern is: Destination, [Operation, Source ...], e.g. a=b+c-d. 
 - The regular keywords in a language are single characters, making use of punctuation
 
-0-9 a-f Accumulate base-10 digits into num (or base-16/etc. depending on the r register).
+0-9 (and lowercase a and on when radix is over 10) these accumulate base-10 digits into num 
 a-z Variables/Registers (SRC or DST). Some registers have special meanings:
-   r Radix (Default 10). Digits are stolen from registers. e.g. a-f are values 10-15 if r:16 and so on. 
+   r Radix (Default 10)
    p Program Counter aka PC
    s Stack Pointer aka SP.
   Might not be contiguous in the array. e.g. while a is 0. b could be register 4, c 8, etc..
 :	Copy operation, e.g. "define" a:5 sets register 0 to 5. a:b copies the value of b to register 0.
-	NUM is added to the register address first. 3a is the third byte after the start of a. 
+	NUM may be added to the register address first. 3a could be the third byte after the start of a. 
 @	index. Replace SRC or DST with the value at that address
 	 and clear op. This sets the stage for another op and SRC.
 	e.g. b@a sets the DST to the address of b plus the value of a.
@@ -25,8 +25,8 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
 	set to the starting address of the string in FLASH.
 	If the operation was already " when a new starting " is seen, 
 	put a " to the dest then enter text mode. "Push ""START""" prints Push "START"
-#	??? Converts the value of source to decimal digits and copies it to DST.
-	incrementing DST after each digit. Managed better by 'r' as radix?
+#	Maybe converts the value of source to decimal digits and copies it to DST
+	incrementing DST after each digit. A way to print. Managed better by 'r' as radix?
 +	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
 	if there is no SRC, the NUM is used as the SRC. a+1 increments a.
 	maybe if last op was +, load 1 into NUM. a++ increments a.
@@ -50,38 +50,38 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
 [	Start loop
 ]	End loop if true flag is not set.
 .	return. Cleanup stack, restore PC.
-P	(PWM) set Pin in DST to output PWM in SRC. e.g. 2P100
 A	set Port pin in SRC to read analog values in e.g. a:2A.
-D D)evice. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details.
+D Device. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details.
 J	(Jump) move NUM lines ?
-R	(RC Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. 1R90
-T	(Terminal) set SRC or DST to the Serial port. 0x89
 I	(In) set the Port or Port pin in SRC to an Input. E.g. a:7I reads pin 7 ADC into a
 H	(High) set the Pin in DST to high. e.g. 1H sets pin 1 high.
 L	(Low) set the Pin in DST to low.
 	When the pin is an input, H and L set or clear TRUE based on the pins value.
+P	(PWM) set Pin in DST to output PWM in SRC. e.g. 2P100
+R	(RC Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. 1R90
+T	(Terminal) set SRC or DST to the Serial port. 0x89
 U	(Up) set Pin in DST to inputs will internal pull-up
 W	wait. Delay for DST u seconds between IO commands. Clears DST. e.g. 100DP0HLHL
 
 Devices: These are the mnemonic character literals passed to the D (Device) 
 function to allocate and configure hardware peripherals.:
-'S' : Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
-'E' : Quadrature Encoder. Arguments: (Type, PinA, PinB).
-'D' : Dynamixel Servo. Arguments: (Type, ID, BaudRate).
-'X' : Serial/UART. Arguments: (Type, TxPin, RxPin, BaudRate).
-'i' : I2C Bus. Arguments: (Type, SclPin, SdaPin).
-'r' : SPI Bus. Arguments: (Type, MisoPin, MosiPin, SckPin).
-'O' : Digital Output (Type, Pin, Value) or use H, L. 
-'I' : Digital Input (Type, Pin, Pull) or use I, or U.
-'P' : PWM Output (Type, Pin, Value) or use P.
 'A' : Analog Input / ADC (Type, Pin) or use A.
+'D' : Dynamixel Servo. Arguments: (Type, ID, BaudRate).
+'i' : I2C Bus. Arguments: (Type, SclPin, SdaPin).
+'I' : Digital Input (Type, Pin, Pull) or use I, or U.
+'O' : Digital Output (Type, Pin, Value) or use H, L. 
+'P' : PWM Output (Type, Pin, Value) or use P.
+'Q' : Quadrature Encoder. Arguments: (Type, PinA, PinB).
 'R' : RC Servo (Type, Pin, Angle) or use S.
+'s' : SPI Bus. Arguments: (Type, MisoPin, MosiPin, SckPin).
+'S' : Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
+'U' : UART / Serial. Arguments: (Type, TxPin, RxPin, BaudRate).
 
 
 Unused (for now)
 $	
-%	printf?
-;	push?
+%	printf 
+;	chains commands together, like a newline
 ^	power? 
 _	label? subelement?
 
@@ -229,6 +229,11 @@ char op = 0;          // Current Operation
 bool src_dst = false; // False = looking for DST, True = looking for SRC
 bool true_flag = true; // For conditionals (?)
 bool skip_line = false; 
+
+// --- EXECUTION & LOOP CONTROL ---
+const char* pc_ptr = nullptr; // Tracks our current position in the bytecode string
+const char* loop_stack[8];    // Supports nested loops up to 8 levels deep
+int loop_depth = 0;           // Current loop nesting level
 
 // --- HARDWARE SHADOWS ---
 long pin_shadow[30];   // Stores digital (0/1) or PWM values
@@ -400,6 +405,30 @@ void processChar(char c) {
   }
   if (in_char_literal) {
     num = c; // Grab the ASCII decimal value
+    return;
+  }
+
+  // Loop Operators
+  if (c == '[') {
+    if (loop_depth < 8) {
+      loop_stack[loop_depth++] = pc_ptr; // Save the address of the '[' character
+    }
+    return;
+  }
+
+  if (c == ']') {
+    doop(); // Execute any pending operations before evaluating the loop exit
+    if (true_flag) {
+      if (loop_depth > 0) {
+        // Jump back! (The evaluateABC loop will increment this by 1, putting us right after '[')
+        pc_ptr = loop_stack[loop_depth - 1]; 
+      }
+    } else {
+      if (loop_depth > 0) {
+        loop_depth--; // Pop the loop stack and exit
+      }
+    }
+    num = 0; op = 0; src_dst = false; dst.raw = 0; src.raw = 0;
     return;
   }
 
@@ -647,11 +676,11 @@ void processChar(char c) {
     return;
   }
 
-  // End of Line / Execution Trigger
-  if (c == '\n' || c == '\r') {
+  // End of Line / Execution Trigger (Now supports ';' chaining)
+  if (c == '\n' || c == '\r' || c == ';') {
     doop(); 
     num = 0; op = 0; src_dst = false; 
-    dst.raw = 0; src.raw = 0; // Clean wipe!
+    dst.raw = 0; src.raw = 0; 
     return;
   }
 
@@ -663,8 +692,10 @@ void processChar(char c) {
 }
 
 void evaluateABC(const char* commands) {
-  while (*commands) {
-    processChar(*commands++);
+  pc_ptr = commands;
+  while (*pc_ptr) {
+    processChar(*pc_ptr);
+    pc_ptr++; // Advance to the next character
   }
 }
 
@@ -692,6 +723,8 @@ void resetTestState() {
   true_flag = true; 
   skip_line = false;
   next_device_index = 1;
+  loop_depth = 0; 
+  pc_ptr = nullptr;
 }
 
 void printCodeIndented(const char* code) {
@@ -847,6 +880,14 @@ void setup() {
     DEBUG_SERIAL.printf("[FAIL] Variable Parameter Shadowing\r\n");
   }
   call_depth = 0; // reset
+
+  // TEST 17: Command Chaining with Semicolon
+  // Assign 1 to a, 2 to b, then add them into c, all on one line.
+  runTest("Semicolon Chaining", "a:1; b:2; c:a+b\n", 'c', 3);
+
+  // TEST 18: Do-While Loop Mechanics
+  // Initialize a to 0. Inside the loop, increment a by 1. Loop while a < 5.
+  runTest("Loop Incrementing", "a:0\n[\na:a+1\na<5\n]\n", 'a', 5);
 
 // --- HARDWARE IN THE LOOP (HIL) TESTS ---
 // Ensure your Wokwi layout connects GP2 to GP3, and contains a simulated RC network from GP22 into GP26 (A0)
