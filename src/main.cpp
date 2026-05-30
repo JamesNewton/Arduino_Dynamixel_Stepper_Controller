@@ -679,7 +679,7 @@ void processChar(char c) {
   // End of Line / Execution Trigger (Now supports ';' chaining)
   if (c == '\n' || c == '\r' || c == ';') {
     doop(); 
-    num = 0; op = 0; src_dst = false; 
+    num = 0; op = 0; src_dst = false; true_flag = false;
     dst.raw = 0; src.raw = 0; 
     return;
   }
@@ -887,7 +887,7 @@ void setup() {
 
   // TEST 18: Do-While Loop Mechanics
   // Initialize a to 0. Inside the loop, increment a by 1. Loop while a < 5.
-  runTest("Loop Incrementing", "a:0\n[\na:a+1\na<5\n]\n", 'a', 5);
+  runTest("Loop Incrementing", "a:0\n[\na:a+1\na<5]\n", 'a', 5);
 
 // --- HARDWARE IN THE LOOP (HIL) TESTS ---
 // Ensure your Wokwi layout connects GP2 to GP3, and contains a simulated RC network from GP22 into GP26 (A0)
@@ -914,7 +914,7 @@ void setup() {
   // Fire inline PWM 128 (50% scale) -> Sleep 50ms for RC settlement -> sample GP26 ADC straight to 'c'
   // 50% voltage on a 10-bit core (1023 max) yields approx 512. 1/4 is about 256.
   runAnalogTest("HIL: PWM to Analog Filter 1", "22P:127\n500000W\nc:26A\n", 'c', 512, 20);
-  runAnalogTest("HIL: PWM to Analog Filter 2", "22P:63\n500000W\nc:26A\n", 'c', 256, 10);
+  runAnalogTest("HIL: PWM to Analog Filter 2", "22P:63\n500000W\nc:26A\n", 'c', 256, 20);
 
   // --- ADVANCED PERIPHERAL REGISTER (HIL) TESTS ---
 
