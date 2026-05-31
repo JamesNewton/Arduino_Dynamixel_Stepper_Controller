@@ -472,6 +472,25 @@ void processChar(char c) {
 
   // Stack Operators: Call Start
   if (c == '(') {
+    // Resolve standalone calls (e.g. "a()") where the function name was captured as a destination
+    if (op == 0 && dst.meta.type == TYPE_REG && src.meta.type == 0) {
+      src = dst;
+      dst.raw = 0;
+    }
+
+    // Force function pointers to resolve from the global table
+    // This ensures shadowed parameter names don't break function execution.
+    if (src.meta.type == TYPE_REG) {
+      int regIndex = src.meta.value;
+      if (vars[regIndex].meta.type == TYPE_CODE) {
+        src.meta.type = TYPE_CODE;
+        src.meta.value = vars[regIndex].meta.value;
+      } else if (vars[regIndex].meta.type == TYPE_DEV) {
+        src.meta.type = TYPE_DEV;
+        src.meta.value = vars[regIndex].meta.value;
+      }
+    }
+
     // Pack current VM execution state to the stack
     long state_flags = (op << 8) | (src_dst ? 1 : 0);
     stack[sp++] = dst.raw;
@@ -481,7 +500,7 @@ void processChar(char c) {
     stack[sp++] = current_arg_count;  // Save caller's arg count
     
     frame_pointer = sp; // New frame starts here
-    src_dst = true; // Ensure arguments are evaluated as sources
+    src_dst = true;     // Ensure arguments are evaluated as sources
     current_arg_count = 0;
     return;
   }
@@ -640,32 +659,38 @@ void processChar(char c) {
       src_dst = true; 
     } else {
       // Looking for source
-      // If the variable holds bytecode, alias the source directly to the code pointer
-      if (vars[regIndex].meta.type == TYPE_CODE) {
+      src.meta.type = TYPE_REG;
+      src.meta.value = regIndex;
+      
+      // Parameter Shadowing:
+      // If inside a function and index is a parameter, strictly use parameter value
+      if (call_depth > 0 && regIndex < current_arg_count) {
+        num = stack[frame_pointer + regIndex];
+      } 
+      // Global Code Resolution
+      else if (vars[regIndex].meta.type == TYPE_CODE) {
         src.meta.type = TYPE_CODE;
         src.meta.value = vars[regIndex].meta.value;
-      } else {
-        src.meta.type = TYPE_REG;
-        src.meta.value = regIndex;
-        
-        // SMART READ: If this register holds an active Device Handle, execute a live peripheral sweep!
-        if (vars[regIndex].meta.type == TYPE_DEV) {
-          int handle = vars[regIndex].meta.value;
-          char d_type = allocated_devices[handle].type;
-          uint8_t target_pin = allocated_devices[handle].pin1;
+      } 
+      // Live Hardware Resolution
+      else if (vars[regIndex].meta.type == TYPE_DEV) {
+        int handle = vars[regIndex].meta.value;
+        char d_type = allocated_devices[handle].type;
+        uint8_t target_pin = allocated_devices[handle].pin1;
 
-          if (d_type == 'I') {
-            num = digitalRead(target_pin);
-          } else if (d_type == 'A') {
-            num = analogRead(target_pin);
-          } else if (d_type == 'R') {
-            num = mock_servos[target_pin]; // Return active tracking state
-          } else {
-            num = allocated_devices[handle].shadow_value; // Fallback to recorded memory state
-          }
+        if (d_type == 'I') {
+          num = digitalRead(target_pin);
+        } else if (d_type == 'A') {
+          num = analogRead(target_pin);
+        } else if (d_type == 'R') {
+          num = mock_servos[target_pin]; 
         } else {
-          num = *getVarPtr(regIndex); // Standard variable register readout
+          num = allocated_devices[handle].shadow_value; 
         }
+      } 
+      // Standard Global Variable
+      else {
+        num = vars[regIndex].meta.value; 
       }
     }
     return;
@@ -1002,7 +1027,7 @@ void setup() {
 
   // TEST 22: Nested Function Calls
   // 'a' increments its argument. 'b' passes its argument to 'a' and adds 10.
-  runTest("Nested Function Calls", "a:\"a+1.\"\nb:\"a(a)+10.\"\nc:b(5)\n", 'c', 16);
+  runTest("Nested Function Calls", "a:\"a:a+1.\"\nb:\"b:a(a)+10.\"\nc:b(5)\n", 'c', 16);
 
 // --- HARDWARE IN THE LOOP (HIL) TESTS ---
 // Ensure your Wokwi layout connects GP2 to GP3, and contains a simulated RC network from GP22 into GP26 (A0)
