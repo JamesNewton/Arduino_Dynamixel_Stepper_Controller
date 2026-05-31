@@ -193,12 +193,14 @@ AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 #endif
 
 // --- CORE ABC VIRTUAL MACHINE STATE ---
-// The Tagged Union structure for dynamically typed targets!
+// The Tagged Union structure for dynamically typed targets
+// This is what I've been missing all these years.
 #define TYPE_NUM 0
 #define TYPE_REG 1
 #define TYPE_PIN 2
 #define TYPE_DEV 3
 #define TYPE_FUNC 4
+#define TYPE_CODE 5
 
 union ABCState {
   long raw;              // Allows a full 32-bit push/pop to the stack
@@ -209,7 +211,7 @@ union ABCState {
   } meta;
 };
 
-ABCState vars[26];   // Upgrade Registers 'a' through 'z' to Typed States!
+ABCState vars[26];   // Upgrade Registers 'a' through 'z' to Typed States
 #define radix vars['r'-'a'].meta.value // Alias 'r' to radix payload value
 #define sp    vars['s'-'a'].meta.value // Alias 's' to stack pointer payload value
 #define pc    vars['p'-'a'].meta.value // Alias 'p' to program counter payload value
@@ -219,6 +221,10 @@ int frame_pointer = 0;      // Points to start of arguments in the current call
 int current_arg_count = 0;  // How many args in the current scope
 int call_depth = 0;         // Are we inside a subroutine?
 
+char code_ram[1024]; // Volatile dictionary for user functions
+int code_ptr = 0;
+bool quote_pending = false; // For detecting "" escapes
+bool in_string_literal = false;
 bool in_char_literal = false; // For parsing 'm'
 long num = 0;                 // Numeric accumulator
 
@@ -345,10 +351,10 @@ void doop() {
             // REAL HARDWARE: servo[target_pin].write(num);
           }
         } else {
-          // No device attached. If the incoming source is an allocated device handle,
-          // migrate the handle configuration and its type properties directly into this register!
-          if (src.meta.type == TYPE_DEV) {
-            vars[dst.meta.value].meta.type = TYPE_DEV;
+          // No device attached. If the incoming source is an allocated device handle OR Code Handle,
+          // migrate the handle configuration and its type properties directly into this register
+          if (src.meta.type == TYPE_DEV || src.meta.type == TYPE_CODE) {
+            vars[dst.meta.value].meta.type = src.meta.type;
             vars[dst.meta.value].meta.value = src.meta.value;
           } else {
             *target = num; // Standard variable literal assignment
@@ -387,7 +393,7 @@ void doop() {
   
   // Clear source and number, but keep destination and operation
   num = 0;
-  src.raw = 0; // The union zero-init clears type, value, and args simultaneously!
+  src.raw = 0; // The union zero-init clears type, value, and args simultaneously
 }
 
 void processChar(char c) {
@@ -405,6 +411,38 @@ void processChar(char c) {
   }
   if (in_char_literal) {
     num = c; // Grab the ASCII decimal value
+    return;
+  }
+
+  // Double Quote String Parsing & Escaping
+  if (in_string_literal && c == '"') {
+    if (quote_pending) {
+      code_ram[code_ptr++] = '"'; // Escaped quote
+      quote_pending = false;
+    } else {
+      quote_pending = true; // Wait to see if the next char is a quote or the end
+    }
+    return;
+  } else if (in_string_literal) {
+    if (quote_pending) {
+      // It was a real ending quote. Terminate and exit string mode.
+      in_string_literal = false;
+      quote_pending = false;
+      code_ram[code_ptr++] = '\0';
+      
+      // Package the string index as the Source
+      src.meta.type = TYPE_CODE;
+      src.meta.value = num;
+      num = 0;
+      // Do NOT return! Let the current character 'c' be processed normally (e.g., \n)
+    } else {
+      code_ram[code_ptr++] = c; // Record normal character
+      return;
+    }
+  } else if (c == '"') {
+    in_string_literal = true;
+    quote_pending = false;
+    num = code_ptr; // Save the starting index into the accumulator
     return;
   }
 
@@ -439,6 +477,11 @@ void processChar(char c) {
     stack[sp++] = dst.raw;
     stack[sp++] = src.raw;
     stack[sp++] = state_flags;
+    stack[sp++] = frame_pointer;      // Save caller's frame
+    stack[sp++] = current_arg_count;  // Save caller's arg count
+    
+    frame_pointer = sp; // New frame starts here
+    src_dst = true; // Ensure arguments are evaluated as sources
     current_arg_count = 0;
     return;
   }
@@ -447,7 +490,8 @@ void processChar(char c) {
   if (c == ',') {
     stack[sp++] = num;
     current_arg_count++;
-    num = 0; op = 0; src_dst = false; 
+    num = 0; op = 0; src_dst = false;
+    src_dst = true; // Ensure the NEXT argument is also a source
     return;
   }
 
@@ -456,10 +500,9 @@ void processChar(char c) {
     stack[sp++] = num;
     current_arg_count++;
 
-    long ret_val = 0; 
-
     // COMPLEX DEVICE SYSTEM CALL MANAGER ('D')
     if (src.meta.type == TYPE_FUNC && src.meta.value == 'D') {
+      long ret_val = 0;
      // Find where our arguments begin on the stack frame
       int arg_start = sp - current_arg_count;
       char dev_type = (char)stack[arg_start]; // First argument pushed is our Type literal
@@ -503,31 +546,75 @@ void processChar(char c) {
             // REAL HARDWARE: servo[pin1].attach(pin1); servo[pin1].write(shadow_value);
             mock_servos[allocated_devices[next_device_index].pin1] = allocated_devices[next_device_index].shadow_value;
             break;
-        }
+        } //done switching device type
 
         ret_val = next_device_index; // Pass back allocated index as our reference tag
         next_device_index++;
+      } //done adding a device
+      sp = frame_pointer; // Drop arguments
+      current_arg_count = stack[--sp];
+      frame_pointer = stack[--sp];
+      long state_flags = stack[--sp];
+      src.raw = stack[--sp];
+      dst.raw = stack[--sp];
+
+      src_dst = (state_flags & 1) != 0;
+      op = (state_flags >> 8) & 0xFF;
+      num = (ret_val > 0) ? 0 : ret_val; 
+      if (ret_val > 0) {
+        src.meta.type = TYPE_DEV;
+        src.meta.value = ret_val;
+      } else {
+        src.raw = 0;  // Clear the C++ function pointer from the source
       }
+      return;
     }
-
-    sp -= current_arg_count;
-    current_arg_count = 0; 
-
-    // Restore the VM state exactly as we left it
-    long state_flags = stack[--sp];
-    src.raw = stack[--sp];
-    dst.raw = stack[--sp];
-
-    src_dst = (state_flags & 1) != 0;
-    op = (state_flags >> 8) & 0xFF;
-
-    // Package our returned index directly as an explicit TYPE_DEV token!
-    if (ret_val > 0) {
+    // USER-DEFINED BYTECODE FUNCTIONS
+    else if (src.meta.type == TYPE_CODE) {
+      stack[sp++] = (long)pc_ptr; // Push Return Address to the stack
+      
+      // OFFSET BY -1 because the evaluateABC loop will automatically do pc_ptr++ right after this
+      pc_ptr = &code_ram[src.meta.value] - 1; 
+      
+      // Clean the active VM state so the function starts fresh
+      op = 0;
+      src_dst = false;
+      dst.raw = 0;
+      src.raw = 0;
       num = 0;
-      src.meta.type = TYPE_DEV;
-      src.meta.value = ret_val;
-    } else {
-      num = ret_val; 
+
+      call_depth++;
+      return;
+    }
+  }
+
+  // Return Operator
+  if (c == '.') {
+    doop(); // Execute any pending operations (like the final '+' in 'a+b')
+    if (call_depth > 0) {
+      long ret_val = 0;
+      
+      // The answer is sitting in the function's destination register
+      if (dst.meta.type == TYPE_REG) {
+        ret_val = *getVarPtr(dst.meta.value);
+      }
+      
+      pc_ptr = (const char*)stack[--sp]; // Pop Return Address
+      
+      // Restore previous frame
+      sp = frame_pointer; // Drop arguments from stack
+      current_arg_count = stack[--sp];
+      frame_pointer = stack[--sp];
+      long state_flags = stack[--sp];
+      src.raw = stack[--sp];
+      dst.raw = stack[--sp];
+      
+      src_dst = (state_flags & 1) != 0;
+      op = (state_flags >> 8) & 0xFF;
+      
+      num = ret_val; // Put the function's result back into the accumulator
+      src.raw = 0;   // Clear the function pointer from the source
+      call_depth--;
     }
     return;
   }
@@ -544,34 +631,41 @@ void processChar(char c) {
     return;
   }
 
-// Identify Variables / Registers (a-z)
+  // Identify Variables / Registers (a-z)
   if (c >= 'a' && c <= 'z') {
     int regIndex = c - 'a';
     if (!src_dst) { // Looking for destination
       dst.meta.type = TYPE_REG;
       dst.meta.value = regIndex;
       src_dst = true; 
-    } else {        // Looking for source
-      src.meta.type = TYPE_REG;
-      src.meta.value = regIndex;
-      
-      // SMART READ: If this register holds an active Device Handle, execute a live peripheral sweep!
-      if (vars[regIndex].meta.type == TYPE_DEV) {
-        int handle = vars[regIndex].meta.value;
-        char d_type = allocated_devices[handle].type;
-        uint8_t target_pin = allocated_devices[handle].pin1;
-
-        if (d_type == 'I') {
-          num = digitalRead(target_pin);
-        } else if (d_type == 'A') {
-          num = analogRead(target_pin);
-        } else if (d_type == 'R') {
-          num = mock_servos[target_pin]; // Return active tracking state
-        } else {
-          num = allocated_devices[handle].shadow_value; // Fallback to recorded memory state
-        }
+    } else {
+      // Looking for source
+      // If the variable holds bytecode, alias the source directly to the code pointer
+      if (vars[regIndex].meta.type == TYPE_CODE) {
+        src.meta.type = TYPE_CODE;
+        src.meta.value = vars[regIndex].meta.value;
       } else {
-        num = *getVarPtr(regIndex); // Standard variable register readout
+        src.meta.type = TYPE_REG;
+        src.meta.value = regIndex;
+        
+        // SMART READ: If this register holds an active Device Handle, execute a live peripheral sweep!
+        if (vars[regIndex].meta.type == TYPE_DEV) {
+          int handle = vars[regIndex].meta.value;
+          char d_type = allocated_devices[handle].type;
+          uint8_t target_pin = allocated_devices[handle].pin1;
+
+          if (d_type == 'I') {
+            num = digitalRead(target_pin);
+          } else if (d_type == 'A') {
+            num = analogRead(target_pin);
+          } else if (d_type == 'R') {
+            num = mock_servos[target_pin]; // Return active tracking state
+          } else {
+            num = allocated_devices[handle].shadow_value; // Fallback to recorded memory state
+          }
+        } else {
+          num = *getVarPtr(regIndex); // Standard variable register readout
+        }
       }
     }
     return;
@@ -616,7 +710,7 @@ void processChar(char c) {
     return;
   }
 
-  // Active Read Modifiers (I, U, A) - Read hardware, retain value in accumulator for assignment!
+  // Active Read Modifiers (I, U, A) - Read hardware, retain value in accumulator for assignment
   if (c == 'I') { // Digital Input
     pin_type[num] = 'I';
     pinMode(num, INPUT);
@@ -647,7 +741,7 @@ void processChar(char c) {
 
   // Handle Conditionals
   if (c == '?') {
-    doop(); // Evaluate the condition first!
+    doop(); // Evaluate the condition first
     if (!true_flag) skip_line = true;
     src_dst = false; op = 0; //reset state for next line
     return;
@@ -725,6 +819,10 @@ void resetTestState() {
   next_device_index = 1;
   loop_depth = 0; 
   pc_ptr = nullptr;
+  code_ptr = 0; 
+  quote_pending = false; 
+  in_string_literal = false;
+  in_char_literal = false;
 }
 
 void printCodeIndented(const char* code) {
@@ -862,7 +960,7 @@ void setup() {
   // TEST 16: Variable Parameter Shadowing
   // We manually spoof entering a subroutine with 2 arguments already on the stack.
   // 'a' should map to stack[0], and 'b' should map to stack[1]. 'c' maps to global.
-  resetTestState(); // Use the formal reset to wipe type metadata!
+  resetTestState(); // Use the formal reset to wipe type metadata
   testCount++;
   stack[0] = 77; // Spoof Arg 1
   stack[1] = 88; // Spoof Arg 2
@@ -871,7 +969,7 @@ void setup() {
   current_arg_count = 2;
   call_depth = 1; // SPOOF WE ARE INSIDE A FUNCTION
   
-  // Try to copy 'a' to 'c'. If shadowing works, 'c' becomes 77, not 0!
+  // Try to copy 'a' to 'c'. If shadowing works, 'c' becomes 77, not 0
   evaluateABC("c:a\n"); 
   if (vars['c'-'a'].meta.value == 77) {
     DEBUG_SERIAL.printf("[PASS] Variable Parameter Shadowing\r\n");
@@ -888,6 +986,23 @@ void setup() {
   // TEST 18: Do-While Loop Mechanics
   // Initialize a to 0. Inside the loop, increment a by 1. Loop while a < 5.
   runTest("Loop Incrementing", "a:0\n[\na:a+1\na<5]\n", 'a', 5);
+
+  // TEST 19: User Defined Functions & Parameter Shadowing
+  // 1. Define 'a' as a function that adds its two arguments (which shadow 'a' and 'b').
+  // 2. Call 'a(4, 5)' and assign the result to 'c'.
+  runTest("User Function Definition & Call", "a:\"a+b.\"\nc:a(4,5)\n", 'c', 9);
+
+  // TEST 20: Quote Escaping and Nested Compilation
+  // 'a' compiles a function into 'b' which sets 'c' to 1.
+  runTest("Nested String Compilation", "a:\"b:\"\"c:1.\"\".\"\na()\nb()\n", 'c', 1);
+
+  // TEST 21: Global Variable Access Inside Functions
+  // 'c' is 3 globally. 'a' adds arg1(a) + arg2(b) + global(c). 4 + 5 + 3 = 12.
+  runTest("Global Variable Scope", "c:3\na:\"a+b+c.\"\nc:a(4,5)\n", 'c', 12);
+
+  // TEST 22: Nested Function Calls
+  // 'a' increments its argument. 'b' passes its argument to 'a' and adds 10.
+  runTest("Nested Function Calls", "a:\"a+1.\"\nb:\"a(a)+10.\"\nc:b(5)\n", 'c', 16);
 
 // --- HARDWARE IN THE LOOP (HIL) TESTS ---
 // Ensure your Wokwi layout connects GP2 to GP3, and contains a simulated RC network from GP22 into GP26 (A0)
@@ -922,7 +1037,7 @@ void setup() {
   // Setup 'o' on Pin 2 as High output, 'i' on Pin 3 as Input. Read 'i' into 'a'.
   runTest("Device: Digital I/O Handle Move", "o:D('O',2,1)\n1000 W\ni:D('I',3,0)\na:i\n", 'a', 1);
 
-  // Toggle our output device handle low, and confirm the input device handle updates smoothly!
+  // Toggle our output device handle low, and confirm the input device handle updates smoothly
   runTest("Device: Digital Write Toggle", "o:D('O',2,1)\ni:D('I',3,0)\no:0\n1000 W\nb:i\n", 'b', 0);
 
   // 2. Analog/PWM Block Handle Testing
