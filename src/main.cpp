@@ -21,8 +21,8 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
 	If the SRC is a port or port pin, read that value in. 
 ' (Single Quote) ASCII literal. Next character is its numeric decimal value ('A' is 65).
 "	(Quote) Text. Each following char is copied to the DST until the ending quote.
-	If the DST is a variable, the chars are actually copied into FLASH and the var is
-	set to the starting address of the string in FLASH.
+	If the DST is a variable, the chars are actually copied into memory and the var is
+	set to the starting address of the string in memory.
 	If the operation was already " when a new starting " is seen, 
 	put a " to the dest then enter text mode. "Push ""START""" prints Push "START"
 #	Maybe converts the value of source to decimal digits and copies it to DST
