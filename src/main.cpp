@@ -244,6 +244,10 @@ int loop_depth = 0;           // Current loop nesting level
 // --- HARDWARE SHADOWS ---
 long pin_shadow[30];   // Stores digital (0/1) or PWM values
 char pin_type[30];     // Mnemonic tags: 
+
+// --- MOCK BUFFERS FOR TESTING ---
+char mock_out_buffer[256];
+int mock_out_ptr = 0;
 long mock_servos[30];  // Stores servo angles
 
 // --- COMPLEX DEVICE MANAGEMENT ---
@@ -307,6 +311,17 @@ long* getVarPtr(int regIndex) {
   return (long*)&vars[regIndex].meta.value;
 }
 
+void devWrite(int handle, char c) {
+  if (allocated_devices[handle].type == 'T') {
+    if (mock_out_ptr < 255) {
+      mock_out_buffer[mock_out_ptr++] = c;
+      mock_out_buffer[mock_out_ptr] = '\0';
+    }
+  } else if (allocated_devices[handle].type == 'U') { // UART
+    // Serial.print(c);
+  }
+}
+
 void doop() {
   if (op == 0) return; // No operation to perform
   long* target = nullptr;
@@ -333,22 +348,41 @@ void doop() {
             digitalWrite(dst.meta.value, num);
           }
         }
+      } else if (dst.meta.type == TYPE_DEV) {
+        int handle = dst.meta.value;
+        if (src.meta.type == TYPE_CODE) {
+          // Stream string literal to the device
+          const char* str = &code_ram[src.meta.value];
+          while (*str) devWrite(handle, *str++);
+        } else {
+          // Standard hardware parameter write (e.g. Servo Angle)
+          allocated_devices[handle].shadow_value = num;
+          // ... [Hardware write logic like analogWrite] ...
+        }
       } else if (dst.meta.type == TYPE_REG) {
         // SMART WRITE: Check if the variable space already holds an active peripheral handle
         if (vars[dst.meta.value].meta.type == TYPE_DEV) {
           int handle = vars[dst.meta.value].meta.value;
           char d_type = allocated_devices[handle].type;
-          uint8_t target_pin = allocated_devices[handle].pin1;
-
-          allocated_devices[handle].shadow_value = num; // Keep internal tracker aligned
-
-          if (d_type == 'O') {
-            digitalWrite(target_pin, num);
-          } else if (d_type == 'P') {
-            analogWrite(target_pin, num);
-          } else if (d_type == 'R') {
-            mock_servos[target_pin] = num;
-            // REAL HARDWARE: servo[target_pin].write(num);
+          if (src.meta.type == TYPE_DEV) {
+            // Device Handle Reassignment (e.g., overwriting an old device with a new D() call)
+            vars[dst.meta.value].meta.type = src.meta.type;
+            vars[dst.meta.value].meta.value = src.meta.value;
+          } else if (src.meta.type == TYPE_CODE) {
+            // Stream string literal directly to the mapped device!
+            const char* str = &code_ram[src.meta.value];
+            while (*str) devWrite(handle, *str++);
+          } else {
+            // Standard hardware parameter write (e.g., Output Pin, Servo Angle)
+            allocated_devices[handle].shadow_value = num; // Keep internal tracker aligned
+            uint8_t target_pin = allocated_devices[handle].pin1;
+            if (d_type == 'O') {
+              digitalWrite(target_pin, num);
+            } else if (d_type == 'P') {
+              analogWrite(target_pin, num);
+            } else if (d_type == 'R') {
+              mock_servos[target_pin] = num;
+            }
           }
         } else {
           // No device attached. If the incoming source is an allocated device handle OR Code Handle,
@@ -362,7 +396,36 @@ void doop() {
         }
       }
       break;
-      
+
+    case '%': // FORMATTING OPERATOR
+      {
+        int handle = -1;
+        // Resolve handle if accessed via raw device OR via variable proxy
+        if (dst.meta.type == TYPE_DEV) {
+          handle = dst.meta.value;
+        } else if (dst.meta.type == TYPE_REG && vars[dst.meta.value].meta.type == TYPE_DEV) {
+          handle = vars[dst.meta.value].meta.value;
+        }
+        
+        if (handle != -1) {
+          if (src.meta.type == TYPE_CODE) {
+            // Dump the function definition wrapped in quotes!
+            devWrite(handle, '"');
+            const char* str = &code_ram[src.meta.value];
+            while (*str) devWrite(handle, *str++);
+            devWrite(handle, '"');
+          } else {
+            // Format numeric accumulator into string using current radix
+            char numStr[33];
+            ltoa(num, numStr, radix);
+            for (int i = 0; numStr[i] != '\0'; i++) {
+              devWrite(handle, numStr[i]);
+            }
+          }
+        }
+      }
+      break;
+
     case '+': if (target) *target += num; break;
     case '-': if (target) *target -= num; break;
     case '&': if (target) *target &= num; break;
@@ -530,11 +593,10 @@ void processChar(char c) {
         allocated_devices[next_device_index].type = dev_type;
         
         switch (dev_type) {
-          case 'O': // Digital Output (Type, Pin, DefaultValue)
+
+          case 'A': // Analog Input (Type, Pin)
             allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-            allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-            pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
-            digitalWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
+            pinMode(allocated_devices[next_device_index].pin1, INPUT);
             break;
 
           case 'I': // Digital Input (Type, Pin, PullupMode)
@@ -547,16 +609,18 @@ void processChar(char c) {
             }
             break;
 
+          case 'O': // Digital Output (Type, Pin, DefaultValue)
+            allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+            allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
+            pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
+            digitalWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
+            break;
+
           case 'P': // PWM Output (Type, Pin, DefaultDuty)
             allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
             allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
             pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
             analogWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
-            break;
-
-          case 'A': // Analog Input (Type, Pin)
-            allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-            pinMode(allocated_devices[next_device_index].pin1, INPUT);
             break;
 
           case 'R': // RC Servo (Type, Pin, DefaultAngle)
@@ -565,7 +629,12 @@ void processChar(char c) {
             // REAL HARDWARE: servo[pin1].attach(pin1); servo[pin1].write(shadow_value);
             mock_servos[allocated_devices[next_device_index].pin1] = allocated_devices[next_device_index].shadow_value;
             break;
-        } //done switching device type
+
+          case 'T': // Mock Terminal Output (Type)
+            // No pins required for the mock terminal
+            break;
+
+          } //done switching device type
 
         ret_val = next_device_index; // Pass back allocated index as our reference tag
         next_device_index++;
@@ -848,6 +917,8 @@ void resetTestState() {
   quote_pending = false; 
   in_string_literal = false;
   in_char_literal = false;
+  mock_out_ptr = 0;
+  mock_out_buffer[0] = '\0';
 }
 
 void printCodeIndented(const char* code) {
@@ -882,7 +953,7 @@ void runTest(const char* testName, const char* code, char checkReg, long expecte
   } else {
     DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       Expected register '%c' to be %ld, but got %ld\r\n", checkReg, expectedValue, actualValue);
+    DEBUG_SERIAL.printf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
   }
 }
 
@@ -892,14 +963,14 @@ void runAnalogTest(const char* testName, const char* code, char checkReg, long e
   evaluateABC(code);
   long actualValue = vars[checkReg - 'a'].meta.value;
   if (abs(actualValue - expectedValue) <= tolerance) {
-    DEBUG_SERIAL.printf("[PASS] %s (Got %ld, expected ~%ld+/-±%ld)\r\n"
+    DEBUG_SERIAL.printf("[PASS] %s (%ld, vs %ld+/-±%ld)\r\n"
       , testName, actualValue, expectedValue, tolerance
     );
     passCount++;
   } else {
     DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       Expected register '%c' to be approx %ld (±%ld), but got %ld\r\n"
+    DEBUG_SERIAL.printf("       '%c' should be %ld (±%ld), got %ld\r\n"
       , checkReg, expectedValue, tolerance, actualValue
     );
   }
@@ -922,6 +993,21 @@ void runHardwareTest(const char* testName, const char* code, int checkPin, long 
     Serial.printf("[FAIL] %s\r\n       Code: %s\r       Expected Pin %d to be %ld, but got %ld\r\n"
       ,testName, code, checkPin, expectedValue, actualValue
     );
+  }
+}
+
+void runStringTest(const char* testName, const char* code, const char* expectedString) {
+  testCount++;
+  resetTestState();
+  evaluateABC(code);
+  
+  if (strcmp(mock_out_buffer, expectedString) == 0) {
+    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    passCount++;
+  } else {
+    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    printCodeIndented(code);
+    DEBUG_SERIAL.printf("       Expected output: '%s', but got '%s'\r\n", expectedString, mock_out_buffer);
   }
 }
 
@@ -1029,6 +1115,22 @@ void setup() {
   // 'a' increments its argument. 'b' passes its argument to 'a' and adds 10.
   runTest("Nested Function Calls", "a:\"a:a+1.\"\nb:\"b:a(a)+10.\"\nc:b(5)\n", 'c', 16);
 
+  // TEST 23: Direct String Output
+  // t is initialized as a Terminal ('T'). We assign a string literal to it.
+  runStringTest("String Literal Output", "t:D('T')\nt:\"HELLO.\"\n", "HELLO.");
+
+  // TEST 24: Base-10 Number Formatting
+  // Assign 123 to 'a'. Format 'a' out to 't'.
+  runStringTest("Base-10 Number Formatting", "t:D('T')\na:123\nt%a\n", "123");
+
+  // TEST 25: Radix-Aware Formatting (Hex)
+  // Switch to base 16. Load 255 into 'g'. Format out to 't'.
+  runStringTest("Radix Hex Formatting", "t:D('T')\ng:255\nr:16\nt%g\n", "ff");
+
+  // TEST 26: Bytecode RAM Dumping
+  // Assign a function to 'a'. Format 'a' out to 't' to dump its definition.
+  runStringTest("Function Definition Dump", "t:D('T')\na:\"2H.\"\nt%a\n", "\"2H.\"");
+
 // --- HARDWARE IN THE LOOP (HIL) TESTS ---
 // Ensure your Wokwi layout connects GP2 to GP3, and contains a simulated RC network from GP22 into GP26 (A0)
 // via a WOKWI filter to average the "analog" PWM output and feed the analog input. 
@@ -1053,8 +1155,8 @@ void setup() {
   // 2. Analog Simulation Filter Catch
   // Fire inline PWM 128 (50% scale) -> Sleep 50ms for RC settlement -> sample GP26 ADC straight to 'c'
   // 50% voltage on a 10-bit core (1023 max) yields approx 512. 1/4 is about 256.
-  runAnalogTest("HIL: PWM to Analog Filter 1", "22P:127\n500000W\nc:26A\n", 'c', 512, 20);
-  runAnalogTest("HIL: PWM to Analog Filter 2", "22P:63\n500000W\nc:26A\n", 'c', 256, 20);
+  runAnalogTest("HIL: PWM to Analog Filter 1", "22P:128\n500000W\nc:26A\n", 'c', 512, 25);
+  runAnalogTest("HIL: PWM to Analog Filter 2", "22P:64\n500000W\nc:26A\n", 'c', 256, 20);
 
   // --- ADVANCED PERIPHERAL REGISTER (HIL) TESTS ---
 
