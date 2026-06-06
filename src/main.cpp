@@ -322,6 +322,67 @@ void devWrite(int handle, char c) {
   }
 }
 
+long allocateDevice(char dev_type, int arg_start) {
+  if (next_device_index >= MAX_DEVICES) return 0;
+  
+  allocated_devices[next_device_index].type = dev_type;
+  switch (dev_type) {
+    case 'A':
+      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+      pinMode(allocated_devices[next_device_index].pin1, INPUT);
+      break;
+    case 'I':
+      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+      if (stack[arg_start + 2] == 1) pinMode(allocated_devices[next_device_index].pin1, INPUT_PULLUP);
+      else pinMode(allocated_devices[next_device_index].pin1, INPUT);
+      break;
+    case 'O':
+      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+      allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
+      pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
+      digitalWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
+      break;
+    case 'P':
+      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+      allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
+      pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
+      analogWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
+      break;
+    case 'R':
+      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+      allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
+      mock_servos[allocated_devices[next_device_index].pin1] = allocated_devices[next_device_index].shadow_value;
+      break;
+    case 'T': 
+      break;
+  }
+  return next_device_index++;
+}
+
+void executeReturn() {
+  if (call_depth <= 0) return;
+  
+  long ret_val = 0;
+  if (dst.meta.type == TYPE_REG) ret_val = *getVarPtr(dst.meta.value);
+  
+  pc_ptr = (const char*)stack[--sp]; // Pop Return Address
+  
+  // Restore previous frame
+  sp = frame_pointer; 
+  current_arg_count = stack[--sp];
+  frame_pointer = stack[--sp];
+  long state_flags = stack[--sp];
+  src.raw = stack[--sp];
+  dst.raw = stack[--sp];
+  
+  src_dst = (state_flags & 1) != 0;
+  op = (state_flags >> 8) & 0xFF;
+  
+  num = ret_val; 
+  src.raw = 0;   
+  call_depth--;
+}
+
 void doop() {
   if (op == 0) return; // No operation to perform
   long* target = nullptr;
@@ -584,61 +645,12 @@ void processChar(char c) {
 
     // COMPLEX DEVICE SYSTEM CALL MANAGER ('D')
     if (src.meta.type == TYPE_FUNC && src.meta.value == 'D') {
-      long ret_val = 0;
      // Find where our arguments begin on the stack frame
       int arg_start = sp - current_arg_count;
-      char dev_type = (char)stack[arg_start]; // First argument pushed is our Type literal
+      char dev_type = (char)stack[arg_start]; 
+      
+      long ret_val = allocateDevice(dev_type, arg_start);
 
-      if (next_device_index < MAX_DEVICES) {
-        allocated_devices[next_device_index].type = dev_type;
-        
-        switch (dev_type) {
-
-          case 'A': // Analog Input (Type, Pin)
-            allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-            pinMode(allocated_devices[next_device_index].pin1, INPUT);
-            break;
-
-          case 'I': // Digital Input (Type, Pin, PullupMode)
-            allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-            // If third argument is 1, configure as pullup, otherwise standard input
-            if (stack[arg_start + 2] == 1) {
-              pinMode(allocated_devices[next_device_index].pin1, INPUT_PULLUP);
-            } else {
-              pinMode(allocated_devices[next_device_index].pin1, INPUT);
-            }
-            break;
-
-          case 'O': // Digital Output (Type, Pin, DefaultValue)
-            allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-            allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-            pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
-            digitalWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
-            break;
-
-          case 'P': // PWM Output (Type, Pin, DefaultDuty)
-            allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-            allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-            pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
-            analogWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
-            break;
-
-          case 'R': // RC Servo (Type, Pin, DefaultAngle)
-            allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-            allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-            // REAL HARDWARE: servo[pin1].attach(pin1); servo[pin1].write(shadow_value);
-            mock_servos[allocated_devices[next_device_index].pin1] = allocated_devices[next_device_index].shadow_value;
-            break;
-
-          case 'T': // Mock Terminal Output (Type)
-            // No pins required for the mock terminal
-            break;
-
-          } //done switching device type
-
-        ret_val = next_device_index; // Pass back allocated index as our reference tag
-        next_device_index++;
-      } //done adding a device
       sp = frame_pointer; // Drop arguments
       current_arg_count = stack[--sp];
       frame_pointer = stack[--sp];
@@ -648,7 +660,7 @@ void processChar(char c) {
 
       src_dst = (state_flags & 1) != 0;
       op = (state_flags >> 8) & 0xFF;
-      num = (ret_val > 0) ? 0 : ret_val; 
+      num = 0; 
       if (ret_val > 0) {
         src.meta.type = TYPE_DEV;
         src.meta.value = ret_val;
@@ -670,7 +682,6 @@ void processChar(char c) {
       dst.raw = 0;
       src.raw = 0;
       num = 0;
-
       call_depth++;
       return;
     }
@@ -679,31 +690,7 @@ void processChar(char c) {
   // Return Operator
   if (c == '.') {
     doop(); // Execute any pending operations (like the final '+' in 'a+b')
-    if (call_depth > 0) {
-      long ret_val = 0;
-      
-      // The answer is sitting in the function's destination register
-      if (dst.meta.type == TYPE_REG) {
-        ret_val = *getVarPtr(dst.meta.value);
-      }
-      
-      pc_ptr = (const char*)stack[--sp]; // Pop Return Address
-      
-      // Restore previous frame
-      sp = frame_pointer; // Drop arguments from stack
-      current_arg_count = stack[--sp];
-      frame_pointer = stack[--sp];
-      long state_flags = stack[--sp];
-      src.raw = stack[--sp];
-      dst.raw = stack[--sp];
-      
-      src_dst = (state_flags & 1) != 0;
-      op = (state_flags >> 8) & 0xFF;
-      
-      num = ret_val; // Put the function's result back into the accumulator
-      src.raw = 0;   // Clear the function pointer from the source
-      call_depth--;
-    }
+    executeReturn();
     return;
   }
 
@@ -887,297 +874,13 @@ void evaluateABC(const char* commands) {
   }
 }
 
-// --- TEST HARNESS FRAMEWORK ---
-int testCount = 0;
-int passCount = 0;
-
-
-void resetTestState() {
-  for(int i=0; i<26; i++) {
-    vars[i].raw = 0;
-    vars[i].meta.type = TYPE_REG; // Set type metadata
-  }
-  for(int i=0; i<30; i++) {
-    pin_shadow[i] = 0;
-    pin_type[i] = 0;
-    mock_servos[i] = 0;
-  }
-  radix = 10; 
-  num = 0; 
-  dst.raw = 0; 
-  src.raw = 0; 
-  op = 0; 
-  src_dst = false; 
-  true_flag = true; 
-  skip_line = false;
-  next_device_index = 1;
-  loop_depth = 0; 
-  pc_ptr = nullptr;
-  code_ptr = 0; 
-  quote_pending = false; 
-  in_string_literal = false;
-  in_char_literal = false;
-  mock_out_ptr = 0;
-  mock_out_buffer[0] = '\0';
-}
-
-void printCodeIndented(const char* code) {
-  DEBUG_SERIAL.print("       Code: ");
-  while (*code) {
-    if (*code == '\n') {
-      DEBUG_SERIAL.print("\r\n");
-      if (*(code + 1) != '\0') {
-        DEBUG_SERIAL.print("             "); // Indent the next line
-      }
-    } else if (*code != '\r') {
-      DEBUG_SERIAL.print(*code);
-    }
-    code++;
-  }
-  if (*(code - 1) != '\n') DEBUG_SERIAL.print("\r\n");
-}
-
-void runTest(const char* testName, const char* code, char checkReg, long expectedValue) {
-  testCount++;
-  
-  resetTestState();
-
-  // 2. Run the bytecode
-  evaluateABC(code);
-
-  // 3. Assert the result
-  long actualValue = vars[checkReg - 'a'].meta.value;
-  if (actualValue == expectedValue) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
-    passCount++;
-  } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
-    printCodeIndented(code);
-    DEBUG_SERIAL.printf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
-  }
-}
-
-void runAnalogTest(const char* testName, const char* code, char checkReg, long expectedValue, long tolerance) {
-  testCount++;
-  resetTestState();
-  evaluateABC(code);
-  long actualValue = vars[checkReg - 'a'].meta.value;
-  if (abs(actualValue - expectedValue) <= tolerance) {
-    DEBUG_SERIAL.printf("[PASS] %s (%ld, vs %ld+/-±%ld)\r\n"
-      , testName, actualValue, expectedValue, tolerance
-    );
-    passCount++;
-  } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
-    printCodeIndented(code);
-    DEBUG_SERIAL.printf("       '%c' should be %ld (±%ld), got %ld\r\n"
-      , checkReg, expectedValue, tolerance, actualValue
-    );
-  }
-}
-
-void runHardwareTest(const char* testName, const char* code, int checkPin, long expectedValue, bool isServo = false) {
-  testCount++;
-  
-  // Reset VM and Mock Hardware
-  resetTestState();
-
-  evaluateABC(code);
-
-  long actualValue = isServo ? mock_servos[checkPin] : pin_shadow[checkPin];
-  
-  if (actualValue == expectedValue) {
-    Serial.printf("[PASS] %s\r\n", testName);
-    passCount++;
-  } else {
-    Serial.printf("[FAIL] %s\r\n       Code: %s\r       Expected Pin %d to be %ld, but got %ld\r\n"
-      ,testName, code, checkPin, expectedValue, actualValue
-    );
-  }
-}
-
-void runStringTest(const char* testName, const char* code, const char* expectedString) {
-  testCount++;
-  resetTestState();
-  evaluateABC(code);
-  
-  if (strcmp(mock_out_buffer, expectedString) == 0) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
-    passCount++;
-  } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
-    printCodeIndented(code);
-    DEBUG_SERIAL.printf("       Expected output: '%s', but got '%s'\r\n", expectedString, mock_out_buffer);
-  }
-}
+#include "abc_tests.h"
 
 void setup() {
   DEBUG_SERIAL.begin(BAUD);
   delay(2000); 
-
-  DEBUG_SERIAL.println("\r\n--- ABC Language Test Harness ---");
-
-  // TEST 1: Basic Assignment (Destination, Operation, Number)
-  runTest("Basic Numeric Assignment", "a:5\n", 'a', 5);
-
-  // TEST 2: Register to Register Assignment
-  runTest("Register Copy", "a:9\nb:a\n", 'b', 9);
-
-  // TEST 3: Math Addition
-  runTest("Simple Addition", "a:5\na:a+2\n", 'a', 7);
-
-  // TEST 4: Chained Operations
-  runTest("Implicit Destination Math", "b:2\na:b+3\n", 'a', 5); 
-
-  // TEST 5: Conditionals (True)
-  runTest("Conditional True", "a:1\na=1?b:9\n", 'b', 9);
-
-  // TEST 6: Conditionals (False)
-  runTest("Conditional False", "a:0\na=1?b:9\n", 'b', 0);
-
-  // TEST 7: Digital High Output
-  runHardwareTest("Digital Pin High", "13H\n", 13, 1);
-
-  // TEST 8: Digital Low Output
-  runHardwareTest("Digital Pin Low", "9L\n", 9, 0);
-
-  // TEST 9: Analog/PWM Output
-  runHardwareTest("Analog PWM Output", "5P:128\n", 5, 128);
-
-  // TEST 10: Servo Output
-  runHardwareTest("Servo Position", "2R:90\n", 2, 90, true);
-
-  // TEST 11: Radix Switching (Base 16)
-  // Set radix to 16, then load hex "10" into 'g'. We can't use 'a' because a-f  
-  // are reserved for hex digits. Expected decimal value: 16
-  runTest("Radix Hex", "r:16\ng:10\n", 'g', 16);
-
-  // TEST 12: Radix Switching (Base 2)
-  // Set radix to 2, then load binary "101" into 'b'. Expected decimal value: 5
-  runTest("Radix Binary", "r:2\nb:101\n", 'b', 5);
-
-  // TEST 13: Single Quote ASCII parsing
-  // Assign the ASCII value of 'm' (109) to 'a'
-  runTest("Single Quote ASCII", "a:'m'\n", 'a', 109);
-
-  // TEST 14: Comma Pushing & Stack Pointer Manipulation
-  // Push 10, 20 to stack. The 's' register (SP) should increment by 2.
-  runTest("Stack Pointer Update", "10, 20,\n", 's', 2);
-
-  // TEST 15: Mock Hardware Device Handle
-  // D is the hardware init function. 'M' is type motor. It returns handle 99 to 'a'.
-  runTest("Hardware Function Call", "a:D('M', 3, 4)\n", 'a', 1);
-
-  // TEST 16: Variable Parameter Shadowing
-  // We manually spoof entering a subroutine with 2 arguments already on the stack.
-  // 'a' should map to stack[0], and 'b' should map to stack[1]. 'c' maps to global.
-  resetTestState(); // Use the formal reset to wipe type metadata
-  testCount++;
-  stack[0] = 77; // Spoof Arg 1
-  stack[1] = 88; // Spoof Arg 2
-  sp = 2;
-  frame_pointer = 0;
-  current_arg_count = 2;
-  call_depth = 1; // SPOOF WE ARE INSIDE A FUNCTION
   
-  // Try to copy 'a' to 'c'. If shadowing works, 'c' becomes 77, not 0
-  evaluateABC("c:a\n"); 
-  if (vars['c'-'a'].meta.value == 77) {
-    DEBUG_SERIAL.printf("[PASS] Variable Parameter Shadowing\r\n");
-    passCount++;
-  } else {
-    DEBUG_SERIAL.printf("[FAIL] Variable Parameter Shadowing\r\n");
-  }
-  call_depth = 0; // reset
-
-  // TEST 17: Command Chaining with Semicolon
-  // Assign 1 to a, 2 to b, then add them into c, all on one line.
-  runTest("Semicolon Chaining", "a:1; b:2; c:a+b\n", 'c', 3);
-
-  // TEST 18: Do-While Loop Mechanics
-  // Initialize a to 0. Inside the loop, increment a by 1. Loop while a < 5.
-  runTest("Loop Incrementing", "a:0\n[\na:a+1\na<5]\n", 'a', 5);
-
-  // TEST 19: User Defined Functions & Parameter Shadowing
-  // 1. Define 'a' as a function that adds its two arguments (which shadow 'a' and 'b').
-  // 2. Call 'a(4, 5)' and assign the result to 'c'.
-  runTest("User Function Definition & Call", "a:\"a+b.\"\nc:a(4,5)\n", 'c', 9);
-
-  // TEST 20: Quote Escaping and Nested Compilation
-  // 'a' compiles a function into 'b' which sets 'c' to 1.
-  runTest("Nested String Compilation", "a:\"b:\"\"c:1.\"\".\"\na()\nb()\n", 'c', 1);
-
-  // TEST 21: Global Variable Access Inside Functions
-  // 'c' is 3 globally. 'a' adds arg1(a) + arg2(b) + global(c). 4 + 5 + 3 = 12.
-  runTest("Global Variable Scope", "c:3\na:\"a+b+c.\"\nc:a(4,5)\n", 'c', 12);
-
-  // TEST 22: Nested Function Calls
-  // 'a' increments its argument. 'b' passes its argument to 'a' and adds 10.
-  runTest("Nested Function Calls", "a:\"a:a+1.\"\nb:\"b:a(a)+10.\"\nc:b(5)\n", 'c', 16);
-
-  // TEST 23: Direct String Output
-  // t is initialized as a Terminal ('T'). We assign a string literal to it.
-  runStringTest("String Literal Output", "t:D('T')\nt:\"HELLO.\"\n", "HELLO.");
-
-  // TEST 24: Base-10 Number Formatting
-  // Assign 123 to 'a'. Format 'a' out to 't'.
-  runStringTest("Base-10 Number Formatting", "t:D('T')\na:123\nt%a\n", "123");
-
-  // TEST 25: Radix-Aware Formatting (Hex)
-  // Switch to base 16. Load 255 into 'g'. Format out to 't'.
-  runStringTest("Radix Hex Formatting", "t:D('T')\ng:255\nr:16\nt%g\n", "ff");
-
-  // TEST 26: Bytecode RAM Dumping
-  // Assign a function to 'a'. Format 'a' out to 't' to dump its definition.
-  runStringTest("Function Definition Dump", "t:D('T')\na:\"2H.\"\nt%a\n", "\"2H.\"");
-
-// --- HARDWARE IN THE LOOP (HIL) TESTS ---
-// Ensure your Wokwi layout connects GP2 to GP3, and contains a simulated RC network from GP22 into GP26 (A0)
-// via a WOKWI filter to average the "analog" PWM output and feed the analog input. 
-// https://wokwi.com/projects/409325290405496833
-  pinMode(2, OUTPUT);
-  pinMode(3, INPUT);
-  digitalWrite(2, HIGH);
-  delay(10); 
-  if (digitalRead(3) == HIGH) {
-    DEBUG_SERIAL.println("[PASS] Native C++ Wiring Check (GP2 -> GP3 connected)");
-  } else {
-    DEBUG_SERIAL.println("[FAIL] Simulator not setup! Please check diagram.json.");
-  }
-  digitalWrite(2, LOW);
-
-  // 1. Set Pin 3 to Input
-    evaluateABC("3P I\n");
-  // 2H fires output. 1000W yields. 3I captures digital input state directly into variable 'a'.
-  runTest("HIL: Active DigIn High Read", "2H\n1000 W\na:3I\n", 'a', 1);
-  runTest("HIL: Active DigIn Low Read", "2L\n1000 W\nb:3I\n", 'b', 0);
-  
-  // 2. Analog Simulation Filter Catch
-  // Fire inline PWM 128 (50% scale) -> Sleep 50ms for RC settlement -> sample GP26 ADC straight to 'c'
-  // 50% voltage on a 10-bit core (1023 max) yields approx 512. 1/4 is about 256.
-  runAnalogTest("HIL: PWM to Analog Filter 1", "22P:128\n500000W\nc:26A\n", 'c', 512, 25);
-  runAnalogTest("HIL: PWM to Analog Filter 2", "22P:64\n500000W\nc:26A\n", 'c', 256, 20);
-
-  // --- ADVANCED PERIPHERAL REGISTER (HIL) TESTS ---
-
-  // 1. Digital Output and Input Device Blocks
-  // Setup 'o' on Pin 2 as High output, 'i' on Pin 3 as Input. Read 'i' into 'a'.
-  runTest("Device: Digital I/O Handle Move", "o:D('O',2,1)\n1000 W\ni:D('I',3,0)\na:i\n", 'a', 1);
-
-  // Toggle our output device handle low, and confirm the input device handle updates smoothly
-  runTest("Device: Digital Write Toggle", "o:D('O',2,1)\ni:D('I',3,0)\no:0\n1000 W\nb:i\n", 'b', 0);
-
-  // 2. Analog/PWM Block Handle Testing
-  // Setup 'o' as a PWM output on pin 22, and 'i' as an Analog ADC listener on pin 26
-  runAnalogTest("Device: PWM/Analog Filter Integration", "o:D('P',22,127)\ni:D('A',26)\n500000 W\nc:i\n", 'c', 512, 20);
-
-  // 3. RC Servo Configuration Stability
-  // Set variable 'v' ('r' is radix) as an RC Servo on Pin 2 with a default tracking position of 90 degrees
-  // Then use 'v:120' to alter position. The structure validates that our base handle remains uncorrupted.
-  runHardwareTest("Device: RC Servo Target Stability", "v:D('R',2,90)\nv:120\n", 2, 120, true);
-
-  DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
-   
+  runAllTests(); // That's it!
 }
 
 void loop() {
