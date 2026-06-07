@@ -1,5 +1,9 @@
 #include <Arduino.h>
+#define TEST // Comment this line out to compile for REAL hardware!
 
+#ifndef TEST
+#include <EEPROM.h>
+#endif
 /*
 Goals 
 - get close to a high level language, w/ understandable syntax, without including a compiler, 
@@ -246,8 +250,12 @@ long pin_shadow[30];   // Stores digital (0/1) or PWM values
 char pin_type[30];     // Mnemonic tags: 
 
 // --- MOCK BUFFERS FOR TESTING ---
+#ifdef TEST
 char mock_out_buffer[256];
 int mock_out_ptr = 0;
+char mock_eeprom[1024]; // Simulates Arduino EEPROM / Flash
+#endif
+int eeprom_ptr = 0;
 long mock_servos[30];  // Stores servo angles
 
 // --- COMPLEX DEVICE MANAGEMENT ---
@@ -313,12 +321,28 @@ long* getVarPtr(int regIndex) {
 
 void devWrite(int handle, char c) {
   if (allocated_devices[handle].type == 'T') {
+#ifdef TEST
     if (mock_out_ptr < 255) {
       mock_out_buffer[mock_out_ptr++] = c;
       mock_out_buffer[mock_out_ptr] = '\0';
     }
-  } else if (allocated_devices[handle].type == 'U') { // UART
-    // Serial.print(c);
+#else
+    DEBUG_SERIAL.print(c); // Route Terminal directly to the real serial console!
+#endif
+  } else if (allocated_devices[handle].type == 'U') { 
+    // UART handler placeholder
+  } else if (allocated_devices[handle].type == 'F') { 
+#ifdef TEST
+    if (eeprom_ptr < 1023) {
+      mock_eeprom[eeprom_ptr++] = c;
+      mock_eeprom[eeprom_ptr] = '\0';
+    }
+#else
+    if (eeprom_ptr < 1023) {
+      EEPROM.write(eeprom_ptr++, c);
+      // Note: On ESP8266/ESP32/RP2040 you must call EEPROM.commit() after writing a full string.
+    }
+#endif
   }
 }
 
@@ -330,6 +354,12 @@ long allocateDevice(char dev_type, int arg_start) {
     case 'A':
       allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
       pinMode(allocated_devices[next_device_index].pin1, INPUT);
+      break;
+    case 'F':
+      eeprom_ptr = 0; 
+#ifdef TEST
+      mock_eeprom[0] = '\0';
+#endif
       break;
     case 'I':
       allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
@@ -362,7 +392,7 @@ long allocateDevice(char dev_type, int arg_start) {
 void executeReturn() {
   if (call_depth <= 0) return;
   
-  long ret_val = 0;
+  long ret_val = num;
   if (dst.meta.type == TYPE_REG) ret_val = *getVarPtr(dst.meta.value);
   
   pc_ptr = (const char*)stack[--sp]; // Pop Return Address
@@ -874,13 +904,45 @@ void evaluateABC(const char* commands) {
   }
 }
 
+#ifdef TEST
 #include "abc_tests.h"
+#endif
 
 void setup() {
   DEBUG_SERIAL.begin(BAUD);
   delay(2000); 
-  
-  runAllTests(); // That's it!
+
+#ifndef TEST
+  // Initialize EEPROM size for RP2040 / ESP boards (Ignored on standard AVR/Uno)
+  #if defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_ESP8266) || defined(ARDUINO_ARCH_ESP32)
+  EEPROM.begin(1024);
+  #endif
+#endif
+
+#ifdef TEST
+  runAllTests();
+  // If a boot script exists in Flash, run it to restore state!
+  if (mock_eeprom[0] != '\0') {
+    DEBUG_SERIAL.println("Executing Boot Script from Mock EEPROM...");
+    evaluateABC(mock_eeprom);
+  }
+#else
+  // REAL HARDWARE BOOT SEQUENCE
+  // Read EEPROM index 0. If it's not empty (0) or uninitialized (255), execute it!
+  char firstChar = EEPROM.read(0);
+  if (firstChar != 0 && firstChar != 255) {
+    DEBUG_SERIAL.println("Executing Boot Script from Hardware EEPROM...");
+    int addr = 0;
+    char c = EEPROM.read(addr);
+    // Load the script from EEPROM into our RAM dictionary to execute it
+    while (c != '\0' && c != 255 && addr < 1023) {
+      code_ram[addr++] = c;
+      c = EEPROM.read(addr);
+    }
+    code_ram[addr] = '\0';
+    evaluateABC(code_ram);
+  }
+#endif
 }
 
 void loop() {
