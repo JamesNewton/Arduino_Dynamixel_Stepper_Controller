@@ -249,6 +249,12 @@ int loop_depth = 0;           // Current loop nesting level
 long pin_shadow[30];   // Stores digital (0/1) or PWM values
 char pin_type[30];     // Mnemonic tags: 
 
+// --- CUSTOM RX BUFFER FOR STRING MATCHING & REPL ---
+char rx_buffer[64];
+int rx_head = 0;
+int rx_tail = 0;
+bool in_repl = false;
+
 // --- MOCK BUFFERS FOR TESTING ---
 #ifdef TEST
 char mock_out_buffer[256];
@@ -326,6 +332,7 @@ void devWrite(int handle, char c) {
       mock_out_buffer[mock_out_ptr++] = c;
       mock_out_buffer[mock_out_ptr] = '\0';
     }
+    if (in_repl) DEBUG_SERIAL.print(c);
 #else
     DEBUG_SERIAL.print(c); // Route Terminal directly to the real serial console!
 #endif
@@ -913,7 +920,6 @@ void setup() {
   delay(2000); 
 
 #ifndef TEST
-  // Initialize EEPROM size for RP2040 / ESP boards (Ignored on standard AVR/Uno)
   #if defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_ESP8266) || defined(ARDUINO_ARCH_ESP32)
   EEPROM.begin(1024);
   #endif
@@ -921,20 +927,17 @@ void setup() {
 
 #ifdef TEST
   runAllTests();
-  // If a boot script exists in Flash, run it to restore state!
   if (mock_eeprom[0] != '\0') {
     DEBUG_SERIAL.println("Executing Boot Script from Mock EEPROM...");
     evaluateABC(mock_eeprom);
   }
 #else
   // REAL HARDWARE BOOT SEQUENCE
-  // Read EEPROM index 0. If it's not empty (0) or uninitialized (255), execute it!
   char firstChar = EEPROM.read(0);
   if (firstChar != 0 && firstChar != 255) {
     DEBUG_SERIAL.println("Executing Boot Script from Hardware EEPROM...");
     int addr = 0;
     char c = EEPROM.read(addr);
-    // Load the script from EEPROM into our RAM dictionary to execute it
     while (c != '\0' && c != 255 && addr < 1023) {
       code_ram[addr++] = c;
       c = EEPROM.read(addr);
@@ -943,15 +946,61 @@ void setup() {
     evaluateABC(code_ram);
   }
 #endif
+
+  // Initialize 't' as the default Terminal for the REPL
+  vars['t'-'a'].meta.type = TYPE_DEV;
+  vars['t'-'a'].meta.value = allocateDevice('T', 0);
+  DEBUG_SERIAL.println("\n--- ABC Interactive REPL ---");
+  in_repl = true;
 }
 
 void loop() {
-  // halt and look for input
-  String input = DEBUG_SERIAL.readStringUntil('\n'); // Wait for user input 
-  if (input.length() > 0) {
-    DEBUG_SERIAL.printf("Evaluating ABC code:\n%s\n", input.c_str());
-    evaluateABC(input.c_str());
-    DEBUG_SERIAL.println("Done evaluating.\n");
+  if (DEBUG_SERIAL.available()) {
+    char c = DEBUG_SERIAL.read();
+    static char last_char = 0;
+
+    // Ignore a Linefeed if it immediately follows a Carriage Return
+    if (c == '\n' && last_char == '\r') {
+      last_char = c;
+      return;
+    }
+
+    // Handle Backspace (ASCII 8 or 127)
+    if (c == '\b' || c == 127) {
+      if (rx_head > rx_tail) {
+        rx_head--; // Remove it from our ring buffer
+        DEBUG_SERIAL.print("\b \b"); // Visually erase it from the terminal
+      }
+      return;
+    }
+
+    // Echo visually 
+    if (c == '\r' || c == '\n') {
+      DEBUG_SERIAL.print("\r\n");
+    } else {
+      DEBUG_SERIAL.print(c);
+    }
+
+    // ring buffer. also for string matching
+    rx_buffer[rx_head % 64] = c;
+    rx_head++;
+
+    // Evaluate the line
+    if (c == '\n' || c == '\r') {
+      char repl_line[128]; // Isolate REPL commands from code_ram!
+      int len = rx_head - rx_tail;
+      
+      for(int i = 0; i < len; i++) {
+        repl_line[i] = rx_buffer[(rx_tail + i) % 64];
+      }
+      repl_line[len] = '\0';
+      
+      evaluateABC(repl_line); // Run it!
+      
+      rx_tail = rx_head; // Consume the buffer
+      DEBUG_SERIAL.print("\r\n> "); // Print the next prompt
+    }
+    
+    last_char = c;
   }
-  delay(1); // Small delay to avoid busy looping
 }
