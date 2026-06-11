@@ -325,6 +325,34 @@ long* getVarPtr(int regIndex) {
   return (long*)&vars[regIndex].meta.value;
 }
 
+bool matchStream(const char* target_str) {
+  int peek_tail = rx_tail; // Create a temporary cursor to peek ahead
+  int i = 0;
+
+  while (target_str[i] != '\0') {
+    // 1. Block character-by-character until we have something to evaluate
+    while (peek_tail == rx_head) {
+      if (DEBUG_SERIAL.available()) {
+        rx_buffer[rx_head % 64] = DEBUG_SERIAL.read();
+        rx_head++;
+      }
+    }
+
+    // 2. Evaluate the character!
+    if (rx_buffer[peek_tail % 64] != target_str[i]) {
+      return false; // MISMATCH! We return false immediately and leave rx_tail completely untouched!
+    }
+
+    // 3. It matched! Move our peek cursor forward and check the next character.
+    peek_tail++;
+    i++;
+  }
+
+  // 4. The entire string matched! Consume the characters permanently.
+  rx_tail = peek_tail; 
+  return true;
+}
+
 void devWrite(int handle, char c) {
   if (allocated_devices[handle].type == 'T') {
 #ifdef TEST
@@ -528,7 +556,31 @@ void doop() {
     case '-': if (target) *target -= num; break;
     case '&': if (target) *target &= num; break;
     case '|': if (target) *target |= num; break;
-    case '=': if (target) true_flag = (*target == num); break;
+
+    case '=': 
+      {
+        int handle = -1;
+        // Resolve handle if accessed via raw device OR via variable proxy
+        if (dst.meta.type == TYPE_DEV) {
+          handle = dst.meta.value;
+        } else if (dst.meta.type == TYPE_REG && vars[dst.meta.value].meta.type == TYPE_DEV) {
+          handle = vars[dst.meta.value].meta.value;
+        }
+        
+        // If we are comparing a Terminal/UART to a String!
+        if (handle != -1 && src.meta.type == TYPE_CODE && 
+           (allocated_devices[handle].type == 'T' || allocated_devices[handle].type == 'U')) {
+          
+          const char* str_to_match = &code_ram[src.meta.value];
+          true_flag = matchStream(str_to_match);
+          
+        } else {
+          // Standard numeric comparison
+          if (target) true_flag = (*target == num); 
+        }
+      }
+      break;
+
     case '<': if (target) true_flag = (*target < num); break;
     case '>': if (target) true_flag = (*target > num); break;
     case '{': if (target) true_flag = (*target <= num); break; 
@@ -926,6 +978,7 @@ void setup() {
 #endif
 
 #ifdef TEST
+
   runAllTests();
   if (mock_eeprom[0] != '\0') {
     DEBUG_SERIAL.println("Executing Boot Script from Mock EEPROM...");

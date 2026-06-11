@@ -44,6 +44,55 @@ void resetTestState(bool wipe_eeprom = true) {
   }
 }
 
+// --- MATCH STREAM TESTS ---
+
+void setupMatchTest(const char* input, int start_tail = 0) {
+  rx_tail = start_tail;
+  rx_head = start_tail;
+  while(*input) {
+    rx_buffer[rx_head % 64] = *input++;
+    rx_head++;
+  }
+}
+
+void runMatchTest(const char* testName, const char* target, bool expectedResult, int expectedTail) {
+  testCount++;
+  bool result = matchStream(target);
+  
+  if (result == expectedResult && rx_tail == expectedTail) {
+    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    passCount++;
+  } else {
+    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    DEBUG_SERIAL.printf("       Expected Result: %d, Got: %d\r\n", expectedResult, result);
+    DEBUG_SERIAL.printf("       Expected Tail: %d, Got: %d\r\n", expectedTail, rx_tail);
+  }
+}
+
+void runMatcherSuite() {
+  // 1. Exact Match
+  setupMatchTest("hello");
+  runMatchTest("Exact Match", "hello", true, 5);
+
+  // 2. Early Mismatch (Leaves tail untouched)
+  setupMatchTest("hi");
+  runMatchTest("Early Mismatch", "hello", false, 0);
+
+  // 3. Late Mismatch (Leaves tail untouched)
+  setupMatchTest("hellx");
+  runMatchTest("Late Mismatch", "hello", false, 0);
+
+  // 4. Sequential Matches
+  setupMatchTest("helloworld");
+  runMatchTest("Sequential Match 1", "hello", true, 5);
+  runMatchTest("Sequential Match 2", "world", true, 10);
+
+  // 5. Ring Buffer Wrap-Around
+  // Buffer size is 64. If we start at 62, "hello" writes to 62, 63, 0, 1, 2.
+  setupMatchTest("hello", 62);
+  runMatchTest("Ring Buffer Wrap-Around", "hello", true, 67);
+}
+
 void printCodeIndented(const char* code) {
   DEBUG_SERIAL.print("       Code: ");
   while (*code) {
@@ -162,10 +211,39 @@ void runBootTest(const char* testName, const char* bootScript, const char* userC
   }
 }
 
+void runStreamCodeTest(const char* testName, const char* streamInput, const char* code, char checkReg, long expectedValue) {
+  testCount++;
+  resetTestState();
+  
+  // Inject the mock human typing into the ring buffer
+  rx_tail = 0; rx_head = 0;
+  while(*streamInput) {
+    rx_buffer[rx_head % 64] = *streamInput++;
+    rx_head++;
+  }
+  
+  // Initialize the terminal device 't' so the code can use it!
+  vars['t'-'a'].meta.type = TYPE_DEV;
+  vars['t'-'a'].meta.value = allocateDevice('T', 0);
+
+  evaluateABC(code);
+  
+  long actualValue = vars[checkReg - 'a'].meta.value;
+  if (actualValue == expectedValue) {
+    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    passCount++;
+  } else {
+    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    printCodeIndented(code);
+    DEBUG_SERIAL.printf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
+  }
+}
+
 void runAllTests() {
   testCount = 0;
   passCount = 0;
   DEBUG_SERIAL.println("\r\n--- ABC Language Test Harness ---");
+  runMatcherSuite();
 
   // --- HARDWARE IN THE LOOP (HIL) TESTS ---
   pinMode(2, OUTPUT);
@@ -317,6 +395,25 @@ void runAllTests() {
   // The boot script defines a function 'b' that returns 99.
   // We reboot, the boot script runs, and then the user calls 'c:b()'.
   runBootTest("EEPROM Boot Script Restoration", "b:\"99.\"\n", "c:b()\n", 'c', 99);
+
+  // TEST 30: Basic Stream Match
+  // Buffer has "hello". Code checks for "hello". If true, a=1. If false, a=2.
+  runStreamCodeTest("VM Stream Exact Match", "hello", "a:2\nt=\"hello\"?a:1", 'a', 1);
+
+  // TEST 31: Stream Mismatch Fallthrough
+  // Buffer has "hi". Code checks for "hello". It fails early, falls through to else (a=2).
+  runStreamCodeTest("VM Stream Early Mismatch", "hi", "a:2\nt=\"hello\"?a:1", 'a', 2);
+
+  // TEST 32: Sequential Multi-Match (The Golden Scenario)
+  // Buffer has "hithere". 
+  // Line 1 checks "hello" (fails, leaves buffer).
+  // Line 2 checks "hi" (passes, consumes "hi", a=2).
+  // Line 3 checks "there" (passes, consumes "there", b=3).
+  runStreamCodeTest("VM Stream Sequential Matching", "hithere", 
+                    "t=\"hello\"? a:1\n"
+                    "t=\"hi\"? a:2\n"
+                    "t=\"there\"? b:3\n", 
+                    'b', 3);
 
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);
