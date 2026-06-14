@@ -42,6 +42,9 @@ void resetTestState(bool wipe_eeprom = true) {
     eeprom_ptr = 0;
     mock_eeprom[0] = '\0';
   }
+  // Set 't' as the default Terminal Device for all executions
+  vars['t'-'a'].meta.type = TYPE_DEV;
+  vars['t'-'a'].meta.value = allocateDevice('T', 0);
 }
 
 // --- MATCH STREAM TESTS ---
@@ -317,8 +320,9 @@ void runAllTests() {
   runTest("Stack Pointer Update", "10, 20,\n", 's', 2);
 
   // TEST 15: Mock Hardware Device Handle
-  // D is the hardware init function. 'M' is type motor. It returns handle 99 to 'a'.
-  runTest("Hardware Function Call", "a:D('M', 3, 4)\n", 'a', 1);
+  // D is the hardware init function. 'M' is type motor. 
+  // Since 't' defaults to Handle 1, the next allocated device will be Handle 2
+  runTest("Hardware Function Call", "a:D('M', 3, 4)\n", 'a', 2);
 
   // TEST 16: Variable Parameter Shadowing
   // We manually spoof entering a subroutine with 2 arguments already on the stack.
@@ -369,19 +373,19 @@ void runAllTests() {
 
   // TEST 23: Direct String Output
   // t is initialized as a Terminal ('T'). We assign a string literal to it.
-  runStringTest("String Literal Output", "t:D('T')\nt:\"HELLO.\"\n", "HELLO.");
+  runStringTest("String Literal Output", "t:\"HELLO.\"\n", "HELLO.");
 
   // TEST 24: Base-10 Number Formatting
   // Assign 123 to 'a'. Format 'a' out to 't'.
-  runStringTest("Base-10 Number Formatting", "t:D('T')\na:123\nt%a\n", "123");
+  runStringTest("Base-10 Number Formatting", "a:123\nt%a\n", "123");
 
   // TEST 25: Radix-Aware Formatting (Hex)
   // Switch to base 16. Load 255 into 'g'. Format out to 't'.
-  runStringTest("Radix Hex Formatting", "t:D('T')\ng:255\nr:16\nt%g\n", "ff");
+  runStringTest("Radix Hex Formatting", "g:255\nr:16\nt%g\n", "ff");
 
   // TEST 26: Bytecode RAM Dumping
   // Assign a function to 'a'. Format 'a' out to 't' to dump its definition.
-  runStringTest("Function Definition Dump", "t:D('T')\na:\"2H.\"\nt%a\n", "\"2H.\"");
+  runStringTest("Function Definition Dump", "a:\"2H.\"\nt%a\n", "\"2H.\"");
 
   // TEST 27: Basic Flash Device Write
   // Allocate 'F' to 'f'. Write "a:1" to it.
@@ -414,6 +418,18 @@ void runAllTests() {
                     "t=\"hi\"? a:2\n"
                     "t=\"there\"? b:3\n", 
                     'b', 3);
+
+  // TEST 33: Queue Length Read
+  // Buffer has "abc". 'q' should dynamically evaluate to 3.
+  runStreamCodeTest("Queue Length Read", "abc", "a:q\n", 'a', 3);
+
+  // TEST 34: Queue Flush
+  // Setting q:0 should instantly consume all characters in the ring buffer.
+  runStreamCodeTest("Queue Flush", "abc", "q:0\na:q\n", 'a', 0);
+
+  // TEST 35: Queue Pop
+  // Decrementing q by 1 (q-1) should pop the oldest character, leaving 2.
+  runStreamCodeTest("Queue Pop", "abc", "q-1\na:q\n", 'a', 2);
 
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);

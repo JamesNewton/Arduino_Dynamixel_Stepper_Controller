@@ -13,9 +13,11 @@ Goals
 
 0-9 (and lowercase a and on when radix is over 10) these accumulate base-10 digits into num 
 a-z Variables/Registers (SRC or DST). Some registers have special meanings:
-   r Radix (Default 10)
-   p Program Counter aka PC
+   p Program Counter aka PC.
+   q Queue length (RX ring buffer). Read/Write to manage incoming stream.
+   r Radix (Default 10).
    s Stack Pointer aka SP.
+   t Terminal Device (Default serial output/input).
   Might not be contiguous in the array. e.g. while a is 0. b could be register 4, c 8, etc..
 :	Copy operation, e.g. "define" a:5 sets register 0 to 5. a:b copies the value of b to register 0.
 	NUM may be added to the register address first. 3a could be the third byte after the start of a. 
@@ -603,7 +605,21 @@ void doop() {
       }
       break;
   }
-  
+
+  // SPECIAL REGISTER SYNC: If 'q' was modified, update the ring buffer tail!
+  if (dst.meta.type == TYPE_REG && dst.meta.value == 'q' - 'a') {
+    // Ensure we aren't shadowing 'q' as a function parameter
+    if (!(call_depth > 0 && dst.meta.value < current_arg_count)) {
+      int new_len = vars['q'-'a'].meta.value;
+      if (new_len < 0) new_len = 0;
+      
+      int max_len = rx_head - rx_tail; // We can't magically create characters
+      if (new_len > max_len) new_len = max_len;
+      
+      rx_tail = rx_head - new_len; // Slide the tail forward!
+    }
+  }
+
   // Clear source and number, but keep destination and operation
   num = 0;
   src.raw = 0; // The union zero-init clears type, value, and args simultaneously
@@ -807,6 +823,12 @@ void processChar(char c) {
       dst.meta.type = TYPE_REG;
       dst.meta.value = regIndex;
       src_dst = true; 
+      
+      // If setting 'q' as destination, sync the live queue length into the register 
+      // so implicit math (like q-1) has the correct base value to modify
+      if (regIndex == 'q' - 'a' && !(call_depth > 0 && regIndex < current_arg_count)) {
+        vars['q'-'a'].meta.value = rx_head - rx_tail;
+      }
     } else {
       // Looking for source
       src.meta.type = TYPE_REG;
@@ -817,11 +839,15 @@ void processChar(char c) {
       if (call_depth > 0 && regIndex < current_arg_count) {
         num = stack[frame_pointer + regIndex];
       } 
+      // Special Register 'q' - Queue Length
+      else if (regIndex == 'q' - 'a') {
+        num = rx_head - rx_tail;
+      }
       // Global Code Resolution
       else if (vars[regIndex].meta.type == TYPE_CODE) {
         src.meta.type = TYPE_CODE;
         src.meta.value = vars[regIndex].meta.value;
-      } 
+      }
       // Live Hardware Resolution
       else if (vars[regIndex].meta.type == TYPE_DEV) {
         int handle = vars[regIndex].meta.value;
