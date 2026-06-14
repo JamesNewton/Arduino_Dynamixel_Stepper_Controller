@@ -402,7 +402,7 @@ void runAllTests() {
 
   // TEST 31: Stream Mismatch Fallthrough
   // Buffer has "hi". Code checks for "hello". It fails early, falls through to else (a=2).
-  runStreamCodeTest("VM Stream Early Mismatch", "hi", "a:2\nt=\"hello\"?a:1", 'a', 2);
+  runStreamCodeTest("VM Stream Early Mismatch", "hi", "t=\"hello\"?a:1!a:2", 'a', 2);
 
   // TEST 32: Sequential Multi-Match (The Golden Scenario)
   // Buffer has "hithere". 

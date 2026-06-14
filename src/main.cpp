@@ -613,8 +613,13 @@ void processChar(char c) {
   if (skip_line) {
     if (c == '\n' || c == '\r') {
       skip_line = false; // Reset at end of line
+      return;
+    } else if (c == '!') {
+      skip_line = false; // Stop skipping so we can process the Else
+      // Don't return, just fall through so the '!' handler can do its job.
+    } else {
+      return;
     }
-    return;
   }
 
   // Single Quote Character Parsing
@@ -961,6 +966,7 @@ void evaluateABC(const char* commands) {
     processChar(*pc_ptr);
     pc_ptr++; // Advance to the next character
   }
+  processChar('\n'); // Automatically execute any pending operations at End of File
 }
 
 #ifdef TEST
