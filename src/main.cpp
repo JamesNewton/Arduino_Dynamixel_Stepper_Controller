@@ -3,7 +3,10 @@
 
 #ifndef TEST
 #include <EEPROM.h>
+#include <Servo.h>
+Servo physical_servos[NUM_DIGITAL_PINS]; 
 #endif
+
 /*
 Goals 
 - get close to a high level language, w/ understandable syntax, without including a compiler, 
@@ -248,8 +251,8 @@ const char* loop_stack[8];    // Supports nested loops up to 8 levels deep
 int loop_depth = 0;           // Current loop nesting level
 
 // --- HARDWARE SHADOWS ---
-long pin_shadow[30];   // Stores digital (0/1) or PWM values
-char pin_type[30];     // Mnemonic tags: 
+long pin_shadow[NUM_DIGITAL_PINS];   // Stores digital (0/1) or PWM values
+char pin_type[NUM_DIGITAL_PINS];     // Mnemonic tags: 
 
 // --- CUSTOM RX BUFFER FOR STRING MATCHING & REPL ---
 char rx_buffer[64];
@@ -264,15 +267,15 @@ int mock_out_ptr = 0;
 char mock_eeprom[1024]; // Simulates Arduino EEPROM / Flash
 #endif
 int eeprom_ptr = 0;
-long mock_servos[30];  // Stores servo angles
+long mock_servos[NUM_DIGITAL_PINS];  // Stores servo angles
 
 // --- COMPLEX DEVICE MANAGEMENT ---
 #define MAX_DEVICES 10
 
 struct DeviceAllocation {
   char type;         // e.g. 'O', 'I', 'P', 'A', 'R', etc...
-  uint8_t pin1;      // Primary Pin (e.g., Output pin, Step, Tx, SCL)
-  uint8_t pin2;      // Secondary Pin (e.g., Dir, Rx, SDA)
+  uint8_t pinA;      // Primary Pin (e.g., Output pin, Step, Tx, SCL)
+  uint8_t pinB;      // Secondary Pin (e.g., Dir, Rx, SDA)
   long shadow_value; // Tracks current duty cycle, servo angle, or pin state
 };
 
@@ -389,8 +392,8 @@ long allocateDevice(char dev_type, int arg_start) {
   allocated_devices[next_device_index].type = dev_type;
   switch (dev_type) {
     case 'A':
-      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-      pinMode(allocated_devices[next_device_index].pin1, INPUT);
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
+      pinMode(allocated_devices[next_device_index].pinA, INPUT);
       break;
     case 'F':
       eeprom_ptr = 0; 
@@ -399,26 +402,30 @@ long allocateDevice(char dev_type, int arg_start) {
 #endif
       break;
     case 'I':
-      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
-      if (stack[arg_start + 2] == 1) pinMode(allocated_devices[next_device_index].pin1, INPUT_PULLUP);
-      else pinMode(allocated_devices[next_device_index].pin1, INPUT);
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
+      if (stack[arg_start + 2] == 1) pinMode(allocated_devices[next_device_index].pinA, INPUT_PULLUP);
+      else pinMode(allocated_devices[next_device_index].pinA, INPUT);
       break;
     case 'O':
-      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-      pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
-      digitalWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
+      pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
+      digitalWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
     case 'P':
-      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-      pinMode(allocated_devices[next_device_index].pin1, OUTPUT);
-      analogWrite(allocated_devices[next_device_index].pin1, allocated_devices[next_device_index].shadow_value);
+      pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
+      analogWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
-    case 'R':
-      allocated_devices[next_device_index].pin1 = stack[arg_start + 1];
+case 'R':
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-      mock_servos[allocated_devices[next_device_index].pin1] = allocated_devices[next_device_index].shadow_value;
+      mock_servos[allocated_devices[next_device_index].pinA] = allocated_devices[next_device_index].shadow_value;
+#ifndef TEST
+      physical_servos[allocated_devices[next_device_index].pinA].attach(allocated_devices[next_device_index].pinA);
+      physical_servos[allocated_devices[next_device_index].pinA].write(allocated_devices[next_device_index].shadow_value);
+#endif
       break;
     case 'T': 
       break;
@@ -503,13 +510,16 @@ void doop() {
           } else {
             // Standard hardware parameter write (e.g., Output Pin, Servo Angle)
             allocated_devices[handle].shadow_value = num; // Keep internal tracker aligned
-            uint8_t target_pin = allocated_devices[handle].pin1;
+            uint8_t target_pin = allocated_devices[handle].pinA;
             if (d_type == 'O') {
               digitalWrite(target_pin, num);
             } else if (d_type == 'P') {
               analogWrite(target_pin, num);
             } else if (d_type == 'R') {
               mock_servos[target_pin] = num;
+#ifndef TEST
+              physical_servos[target_pin].write(num);
+#endif
             }
           }
         } else {
@@ -601,7 +611,12 @@ void doop() {
       if (dst.meta.type == TYPE_PIN) {
         mock_servos[dst.meta.value] = num;
         pin_type[dst.meta.value] = 'R';
-        // REAL HARDWARE: servo[dst.meta.value].write(num);
+#ifndef TEST
+        if (!physical_servos[dst.meta.value].attached()) {
+          physical_servos[dst.meta.value].attach(dst.meta.value);
+        }
+        physical_servos[dst.meta.value].write(num);
+#endif
       }
       break;
   }
@@ -852,7 +867,7 @@ void processChar(char c) {
       else if (vars[regIndex].meta.type == TYPE_DEV) {
         int handle = vars[regIndex].meta.value;
         char d_type = allocated_devices[handle].type;
-        uint8_t target_pin = allocated_devices[handle].pin1;
+        uint8_t target_pin = allocated_devices[handle].pinA;
 
         if (d_type == 'I') {
           num = digitalRead(target_pin);
