@@ -146,59 +146,17 @@ _	label? subelement?
   const uint8_t DXL_DIR_PIN = 2; // DYNAMIXEL Shield DIR PIN
 #endif
 
-#define SERVO_ID 1
+#define DYNAMIXEL_SERVO_ID 1
 
-#define SERVO_MODE OP_EXTENDED_POSITION
+#define DYNAMIXEL_SERVO_MODE OP_EXTENDED_POSITION
 //https://emanual.robotis.com/docs/en/popup/arduino_api/setOperatingMode/
 
 Dynamixel2Arduino dxl(DXL_SERIAL, DXL_DIR_PIN);
-int servo_id;
+int dynamixel_servo_id;
 using namespace ControlTableItem;
 #else
 #define DXL_DIR_PIN -1
 #define DEBUG_SERIAL Serial
-#endif
-
-#ifdef STEPPER_SUPPORT
-#include <MultiStepper.h>
-#include <AccelStepper.h>
-//the default pins are used if you just start with an M oplet. Or 0,0M
-#define DEFAULT_STEP_PIN 3
-#define DEFAULT_DIR_PIN 4
-/* Good starting values for different modes
- * Vel  Accel Microstep mode
- *  30   15   Full
- *  60   30   Half
- * 120   60   Quarter
- * 240  120   Eighth
- * 480  240   Sixteenth
- */
-#define DEFAULT_VELOCITY 480
-#define DEFAULT_ACCEL 240 
-#define DEFAULT_STEP_DELAY_US 1
-
-int dir_pin,step_pin;
-
-void step(){ //TODO Allow for stepper drivers with a negative going step signal. Are there any?
-    digitalWrite(step_pin, HIGH); // step HIGH
-    delayMicroseconds(DEFAULT_STEP_DELAY_US);    // Delay the minimum allowed pulse width
-    digitalWrite(step_pin, LOW); // step LOW
-}
-
-void step_forward() {
-    digitalWrite(dir_pin, HIGH); // Set direction first else get rogue pulses
-    step();
-}
-
-void step_back() {
-    digitalWrite(dir_pin, LOW); // Set direction first else get rogue pulses
-    step();
-}
-
-//AccelStepper stepper(AccelStepper::DRIVER, DEFAULT_STEP_PIN, DEFAULT_DIR_PIN); 
-//Instead, use the version with the two functions, so we can control the pins.
-//https://www.airspayce.com/mikem/arduino/AccelStepper/classAccelStepper.html#afa3061ce813303a8f2fa206ee8d012bd
-AccelStepper stepper(step_forward, step_back); //avoids setting up the pins now.
 #endif
 
 // --- CORE ABC VIRTUAL MACHINE STATE ---
@@ -282,18 +240,36 @@ struct DeviceAllocation {
 DeviceAllocation allocated_devices[MAX_DEVICES];
 int next_device_index = 1; // Start at 1 so Handle ID 0 remains a standard null/number
 
-void delayus(unsigned long us) {
-  if (us>1000) { //can't delayMicroseconds() more than 16838
-    delay(us/1000);
-    us=us % 1000;
+#ifdef STEPPER_SUPPORT
+#include <AccelStepper.h>
+// Array of pointers mapped to the Device Handle IDs
+AccelStepper* physical_steppers[MAX_DEVICES] = {nullptr}; 
+#endif
+
+
+
+inline void vm_yield() {
+#ifdef STEPPER_SUPPORT
+  for (int i = 1; i < next_device_index; i++) {
+    if (allocated_devices[i].type == 'S' && physical_steppers[i] != nullptr) {
+      physical_steppers[i]->run();
     }
-  delayMicroseconds(us);
   }
+#endif
+  // Future: Could add Dynamixel
+}
+
+void delayus(unsigned long us) {
+  unsigned long start = micros();
+  while (micros() - start < us) {
+    vm_yield();
+  }
+}
 
 #ifdef DYNAMIXEL_SUPPORT
-void rebootServo(int id, int mode) { //setup servo id number into mode.
+void rebootDynamixelServo(int id, int mode) { //setup servo id number into mode.
   dxl.torqueOff(id);
-  if (!mode) mode = SERVO_MODE;
+  if (!mode) mode = DYNAMIXEL_SERVO_MODE;
   DEBUG_SERIAL.print("{\"Servo\": ");
   DEBUG_SERIAL.print(id);
   if (dxl.setOperatingMode(id, mode)) {
@@ -337,6 +313,7 @@ bool matchStream(const char* target_str) {
   while (target_str[i] != '\0') {
     // 1. Block character-by-character until we have something to evaluate
     while (peek_tail == rx_head) {
+      vm_yield();
       if (DEBUG_SERIAL.available()) {
         rx_buffer[rx_head % 64] = DEBUG_SERIAL.read();
         rx_head++;
@@ -418,13 +395,29 @@ long allocateDevice(char dev_type, int arg_start) {
       pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
       analogWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
-case 'R':
+    case 'R':
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       mock_servos[allocated_devices[next_device_index].pinA] = allocated_devices[next_device_index].shadow_value;
 #ifndef TEST
       physical_servos[allocated_devices[next_device_index].pinA].attach(allocated_devices[next_device_index].pinA);
       physical_servos[allocated_devices[next_device_index].pinA].write(allocated_devices[next_device_index].shadow_value);
+#endif
+      break;
+    case 'S':
+      //TODO: check current_arg_count to ensure we have enough parameters.
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
+      allocated_devices[next_device_index].pinB = stack[arg_start + 2];
+      allocated_devices[next_device_index].shadow_value = 0; // Tracks target
+#ifdef STEPPER_SUPPORT
+      // AccelStepper::DRIVER (1) indicates a dedicated Step/Dir driver
+      physical_steppers[next_device_index] = new AccelStepper(
+        AccelStepper::DRIVER, 
+        allocated_devices[next_device_index].pinA, 
+        allocated_devices[next_device_index].pinB
+        );
+      physical_steppers[next_device_index]->setMaxSpeed(stack[arg_start + 3]);
+      physical_steppers[next_device_index]->setAcceleration(stack[arg_start + 4]);
 #endif
       break;
     case 'T': 
@@ -507,7 +500,7 @@ void doop() {
             // Stream string literal directly to the mapped device!
             const char* str = &code_ram[src.meta.value];
             while (*str) devWrite(handle, *str++);
-          } else {
+          } else { //src is not DEV or CODE. Must be a device?
             // Standard hardware parameter write (e.g., Output Pin, Servo Angle)
             allocated_devices[handle].shadow_value = num; // Keep internal tracker aligned
             uint8_t target_pin = allocated_devices[handle].pinA;
@@ -520,8 +513,17 @@ void doop() {
 #ifndef TEST
               physical_servos[target_pin].write(num);
 #endif
+            } else if (d_type == 'S') {
+#ifdef STEPPER_SUPPORT
+              num = physical_steppers[handle] ? 
+                physical_steppers[handle]->currentPosition() : 
+                0
+               ;
+#else
+              num = allocated_devices[handle].shadow_value; // Fallback for testing
+#endif
             }
-          }
+          } //end of src is NOT DEV or CODE, device?
         } else {
           // No device attached. If the incoming source is an allocated device handle OR Code Handle,
           // migrate the handle configuration and its type properties directly into this register
@@ -532,7 +534,7 @@ void doop() {
             *target = num; // Standard variable literal assignment
           }
         }
-      }
+      } //END OF dest is TYPE_REG
       break;
 
     case '%': // FORMATTING OPERATOR
@@ -875,6 +877,12 @@ void processChar(char c) {
           num = analogRead(target_pin);
         } else if (d_type == 'R') {
           num = mock_servos[target_pin]; 
+        } else if (d_type == 'S') {
+#ifdef STEPPER_SUPPORT
+          if (physical_steppers[handle]) {
+            physical_steppers[handle]->moveTo(num);
+          }
+#endif
         } else {
           num = allocated_devices[handle].shadow_value; 
         }
@@ -1004,6 +1012,7 @@ void processChar(char c) {
 void evaluateABC(const char* commands) {
   pc_ptr = commands;
   while (*pc_ptr) {
+    vm_yield();
     processChar(*pc_ptr);
     pc_ptr++; // Advance to the next character
   }
