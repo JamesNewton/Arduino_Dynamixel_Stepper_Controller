@@ -9,6 +9,15 @@ int testCount = 0;
 int passCount = 0;
 
 void resetTestState(bool wipe_eeprom = true) {
+#ifdef STEPPER_SUPPORT
+  for (int i = 1; i < MAX_DEVICES; i++) {
+    if (physical_steppers[i] != nullptr) {
+      delete physical_steppers[i];
+      physical_steppers[i] = nullptr;
+    }
+  }
+#endif
+  next_device_index = 1;
   for(int i=0; i<26; i++) {
     vars[i].raw = 0;
     vars[i].meta.type = TYPE_REG; // Set type metadata
@@ -430,6 +439,24 @@ void runAllTests() {
   // TEST 35: Queue Pop
   // Decrementing q by 1 (q-1) should pop the oldest character, leaving 2.
   runStreamCodeTest("Queue Pop", "abc", "q-1\na:q\n", 'a', 2);
+
+  // TEST 36: Stepper Motor Kinematics (Non-Blocking)
+  // 1. Allocate Stepper 'm' to pins 3 & 4. Max Vel=1000, Accel=5000.
+  // 2. Command move to 100.
+  // 3. Wait 50ms (motor should be accelerating, >0 but <100). Save to 'a'.
+  // 4. Wait 250ms (motor should easily reach 100 by now). Save to 'b'.
+  // 5. If all kinematics checks pass, set c=1.
+  runTest(
+    "Stepper Motion & Heartbeat", 
+    "m:D('S', 3, 4, 1000, 5000)\n"
+    "m:100\n"
+    "50000 W\n"
+    "a:m\n"
+    "250000 W\n"
+    "b:m\n"
+    "c:0\n"
+    "a>0? a<100? b=100? c:1\n"
+    ,'c', 1);
 
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);

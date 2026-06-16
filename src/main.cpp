@@ -249,9 +249,11 @@ AccelStepper* physical_steppers[MAX_DEVICES] = {nullptr};
 
 
 inline void vm_yield() {
+  //sleep_us(1); 
 #ifdef STEPPER_SUPPORT
   for (int i = 1; i < next_device_index; i++) {
     if (allocated_devices[i].type == 'S' && physical_steppers[i] != nullptr) {
+      //DEBUG_SERIAL.print(".");
       physical_steppers[i]->run();
     }
   }
@@ -411,6 +413,9 @@ long allocateDevice(char dev_type, int arg_start) {
       allocated_devices[next_device_index].shadow_value = 0; // Tracks target
 #ifdef STEPPER_SUPPORT
       // AccelStepper::DRIVER (1) indicates a dedicated Step/Dir driver
+      if (physical_steppers[next_device_index] != nullptr) {
+        delete physical_steppers[next_device_index];
+      }
       physical_steppers[next_device_index] = new AccelStepper(
         AccelStepper::DRIVER, 
         allocated_devices[next_device_index].pinA, 
@@ -515,12 +520,10 @@ void doop() {
 #endif
             } else if (d_type == 'S') {
 #ifdef STEPPER_SUPPORT
-              num = physical_steppers[handle] ? 
-                physical_steppers[handle]->currentPosition() : 
-                0
-               ;
-#else
-              num = allocated_devices[handle].shadow_value; // Fallback for testing
+              if (physical_steppers[handle]) {
+                physical_steppers[handle]->moveTo(num);
+                //DEBUG_SERIAL.printf("Stepper %d Target Set: %ld\r\n", handle, physical_steppers[handle]->distanceToGo());
+              }
 #endif
             }
           } //end of src is NOT DEV or CODE, device?
@@ -880,8 +883,12 @@ void processChar(char c) {
         } else if (d_type == 'S') {
 #ifdef STEPPER_SUPPORT
           if (physical_steppers[handle]) {
-            physical_steppers[handle]->moveTo(num);
+            num = physical_steppers[handle]->currentPosition(); // Actually READ the position!
+          } else {
+            num = 0;
           }
+#else
+          num = allocated_devices[handle].shadow_value; // Fallback for testing
 #endif
         } else {
           num = allocated_devices[handle].shadow_value; 
