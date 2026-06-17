@@ -15,6 +15,9 @@ void resetTestState(bool wipe_eeprom = true) {
       delete physical_steppers[i];
       physical_steppers[i] = nullptr;
     }
+    for (int j = 0; j < DYNAMIXEL_CTRL_TABLE_LENGTH; j++) {
+      mock_dxl_ram[i][j] = 0;
+    }
   }
 #endif
   next_device_index = 1;
@@ -457,6 +460,21 @@ void runAllTests() {
     "c:0\n"
     "a>0? a<100? b=100? c:1\n"
     ,'c', 1);
+
+  // TEST 37: Dynamixel Default Behaviors
+  // Allocate to 'd'. Writing 500 implicitly hits address 116. 
+  // Reading implicitly checks address 132 (which our mock auto-updates).
+  runTest("Dynamixel Default Position Read/Write", 
+          "d:D('D', 1, 115200)\n"
+          "d:500\n"
+          "a:d\n", 'a', 500);
+
+  // TEST 38: Dynamixel Explicit Register Targeting (@)
+  // Write 1 to LED register (65). Read from register 65 into 'b'.
+  runTest("Dynamixel Explicit Register Target (@)", 
+          "d:D('D', 1, 115200)\n"
+          "65@d : 1\n"
+          "b : 65@d\n", 'b', 1);
 
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);

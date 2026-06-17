@@ -14,30 +14,28 @@ Goals
 - The main pattern is: Destination, [Operation, Source ...], e.g. a=b+c-d. 
 - The regular keywords in a language are single characters, making use of punctuation
 
-0-9 (and lowercase a and on when radix is over 10) these accumulate base-10 digits into num 
+0-9 (and lowercase a and on when radix is over 10) these accumulate base 'r' digits into num 
 a-z Variables/Registers (SRC or DST). Some registers have special meanings:
    p Program Counter aka PC.
    q Queue length (RX ring buffer). Read/Write to manage incoming stream.
-   r Radix (Default 10).
+   r Radix (Default 10). Higher values treat 'a' on as digits. e.g. a-f for hex if r=16.
    s Stack Pointer aka SP.
    t Terminal Device (Default serial output/input).
   Might not be contiguous in the array. e.g. while a is 0. b could be register 4, c 8, etc..
 :	Copy operation, e.g. "define" a:5 sets register 0 to 5. a:b copies the value of b to register 0.
 	NUM may be added to the register address first. 3a could be the third byte after the start of a. 
-@	index. Replace SRC or DST with the value at that address
-	 and clear op. This sets the stage for another op and SRC.
-	e.g. b@a sets the DST to the address of b plus the value of a.
-	If the SRC is a port or port pin, read that value in. 
+@	index. Set an address for a device (dynamixel, I2C, etc...) or an offset for an array.
 ' (Single Quote) ASCII literal. Next character is its numeric decimal value ('A' is 65).
 "	(Quote) Text. Each following char is copied to the DST until the ending quote.
 	If the DST is a variable, the chars are actually copied into memory and the var is
 	set to the starting address of the string in memory.
 	If the operation was already " when a new starting " is seen, 
 	put a " to the dest then enter text mode. "Push ""START""" prints Push "START"
-#	Maybe converts the value of source to decimal digits and copies it to DST
-	incrementing DST after each digit. A way to print. Managed better by 'r' as radix?
+  Can also be used to match incomming text. e.g. t="HELLO"?t:"HI"
+%	Maybe converts the value of source to digits (radix r) and copies it to DST
+  TODO: Use previous num as length and following num as precision. e.g. 8%2a
 +	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
-	if there is no SRC, the NUM is used as the SRC. a+1 increments a.
+	TODO: if there is no SRC, the NUM is used as the SRC. a+1 increments a.
 	maybe if last op was +, load 1 into NUM. a++ increments a.
 -	set operation to subtract
 &	set operation to bitwise AND. a-&b ANDs a with NOT b. a&-b subtracts b from a (& is ignored)
@@ -51,7 +49,7 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
 		; e.g. a<b~ will set the true flag if a is greater than or equal to b.
 		; >~ is less than or equal too. <~ is greater than or equal too. =~ is not equal
 	perhaps change to ` (single back tick) (ASCII value of '!' plus '=' less 63)
-?	if. Skip to the next line if the comparison fails (not TRUE)& keep skipping indented lines.
+?	if. Skip to the next line or ! if the comparison fails (not TRUE)& keep skipping indented lines.
 !	(or \?) else. Skip to the next line if the comparison succeeded & keep skipping indented lines. 
 (	parms. Prep for a function call by pushing state.
 , push accumulated NUM as an argument to the stack and increment SP. Clear NUM for the next 
@@ -76,15 +74,17 @@ Devices: These are the mnemonic character literals passed to the D (Device)
 function to allocate and configure hardware peripherals.:
 'A' : Analog Input / ADC (Type, Pin) or use A.
 'D' : Dynamixel Servo. Arguments: (Type, ID, BaudRate).
-'i' : I2C Bus. Arguments: (Type, SclPin, SdaPin).
+    Address the control table with the @ operator. e.g. 65@d:1 to turn on the LED.
+    The default address is Goal Position on write, current position on read.
+'i' : I2C Bus. Arguments: (Type, SclPin, SdaPin). TODO
 'I' : Digital Input (Type, Pin, Pull) or use I, or U.
 'O' : Digital Output (Type, Pin, Value) or use H, L. 
 'P' : PWM Output (Type, Pin, Value) or use P.
-'Q' : Quadrature Encoder. Arguments: (Type, PinA, PinB).
+'Q' : Quadrature Encoder. Arguments: (Type, PinA, PinB). TODO
 'R' : RC Servo (Type, Pin, Angle) or use S.
-'s' : SPI Bus. Arguments: (Type, MisoPin, MosiPin, SckPin).
+'s' : SPI Bus. Arguments: (Type, MisoPin, MosiPin, SckPin). TODO
 'S' : Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
-'U' : UART / Serial. Arguments: (Type, TxPin, RxPin, BaudRate).
+'U' : UART / Serial. Arguments: (Type, TxPin, RxPin, BaudRate). TODO
 
 
 Unused (for now)
@@ -147,6 +147,7 @@ _	label? subelement?
 #endif
 
 #define DYNAMIXEL_SERVO_ID 1
+#define DYNAMIXEL_CTRL_TABLE_LENGTH 256
 
 #define DYNAMIXEL_SERVO_MODE OP_EXTENDED_POSITION
 //https://emanual.robotis.com/docs/en/popup/arduino_api/setOperatingMode/
@@ -202,11 +203,25 @@ char op = 0;          // Current Operation
 bool src_dst = false; // False = looking for DST, True = looking for SRC
 bool true_flag = true; // For conditionals (?)
 bool skip_line = false; 
+long active_sub_addr = -1; // Tracks the @ operator address
 
 // --- EXECUTION & LOOP CONTROL ---
 const char* pc_ptr = nullptr; // Tracks our current position in the bytecode string
 const char* loop_stack[8];    // Supports nested loops up to 8 levels deep
 int loop_depth = 0;           // Current loop nesting level
+
+// --- COMPLEX DEVICE MANAGEMENT ---
+#define MAX_DEVICES 10
+
+struct DeviceAllocation {
+  char type;         // e.g. 'O', 'I', 'P', 'A', 'R', etc...
+  uint8_t pinA;      // Primary Pin (e.g., Output pin, Step, Tx, SCL)
+  uint8_t pinB;      // Secondary Pin (e.g., Dir, Rx, SDA)
+  long shadow_value; // Tracks current duty cycle, servo angle, or pin state
+};
+
+DeviceAllocation allocated_devices[MAX_DEVICES];
+int next_device_index = 1; // Start at 1 so Handle ID 0 remains a standard null/number
 
 // --- HARDWARE SHADOWS ---
 long pin_shadow[NUM_DIGITAL_PINS];   // Stores digital (0/1) or PWM values
@@ -223,22 +238,11 @@ bool in_repl = false;
 char mock_out_buffer[256];
 int mock_out_ptr = 0;
 char mock_eeprom[1024]; // Simulates Arduino EEPROM / Flash
+long mock_dxl_ram[MAX_DEVICES][DYNAMIXEL_CTRL_TABLE_LENGTH]; 
+// Simulates control table
 #endif
 int eeprom_ptr = 0;
 long mock_servos[NUM_DIGITAL_PINS];  // Stores servo angles
-
-// --- COMPLEX DEVICE MANAGEMENT ---
-#define MAX_DEVICES 10
-
-struct DeviceAllocation {
-  char type;         // e.g. 'O', 'I', 'P', 'A', 'R', etc...
-  uint8_t pinA;      // Primary Pin (e.g., Output pin, Step, Tx, SCL)
-  uint8_t pinB;      // Secondary Pin (e.g., Dir, Rx, SDA)
-  long shadow_value; // Tracks current duty cycle, servo angle, or pin state
-};
-
-DeviceAllocation allocated_devices[MAX_DEVICES];
-int next_device_index = 1; // Start at 1 so Handle ID 0 remains a standard null/number
 
 #ifdef STEPPER_SUPPORT
 #include <AccelStepper.h>
@@ -425,6 +429,20 @@ long allocateDevice(char dev_type, int arg_start) {
       physical_steppers[next_device_index]->setAcceleration(stack[arg_start + 4]);
 #endif
       break;
+    case 'D':
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1]; // Servo ID
+      allocated_devices[next_device_index].shadow_value = 0; 
+#ifdef DYNAMIXEL_SUPPORT
+      dxl.begin(stack[arg_start + 2]); // Baudrate
+      dxl.setPortProtocolVersion(2.0);
+      dxl.ping(allocated_devices[next_device_index].pinA);
+      
+      // Standard Boot: Torque off, set Position mode, Torque on
+      dxl.torqueOff(allocated_devices[next_device_index].pinA);
+      dxl.setOperatingMode(allocated_devices[next_device_index].pinA, OP_POSITION);
+      dxl.torqueOn(allocated_devices[next_device_index].pinA);
+#endif
+      break;
     case 'T': 
       break;
   }
@@ -522,9 +540,21 @@ void doop() {
 #ifdef STEPPER_SUPPORT
               if (physical_steppers[handle]) {
                 physical_steppers[handle]->moveTo(num);
-                //DEBUG_SERIAL.printf("Stepper %d Target Set: %ld\r\n", handle, physical_steppers[handle]->distanceToGo());
               }
 #endif
+            } else if (d_type == 'D') {
+              long write_addr = (active_sub_addr != -1) ? active_sub_addr : 116; // Default: Goal Position
+              allocated_devices[handle].shadow_value = num;
+#ifdef TEST
+              mock_dxl_ram[handle][write_addr % 256] = num;
+              // Auto-update present position for instant test feedback
+              if (write_addr == 116) mock_dxl_ram[handle][132] = num; 
+#else
+  #ifdef DYNAMIXEL_SUPPORT
+              dxl.writeControlTableItem(write_addr, target_pin, num);
+  #endif
+#endif
+              active_sub_addr = -1; // Consume the address
             }
           } //end of src is NOT DEV or CODE, device?
         } else {
@@ -656,6 +686,13 @@ void processChar(char c) {
     } else {
       return;
     }
+  }
+
+  // Device Address Indexing Modifier (@)
+  if (c == '@') {
+    active_sub_addr = num;
+    num = 0; // Clear accumulator for the upcoming device handle
+    return;
   }
 
   // Single Quote Character Parsing
@@ -883,13 +920,25 @@ void processChar(char c) {
         } else if (d_type == 'S') {
 #ifdef STEPPER_SUPPORT
           if (physical_steppers[handle]) {
-            num = physical_steppers[handle]->currentPosition(); // Actually READ the position!
+            num = physical_steppers[handle]->currentPosition();
           } else {
             num = 0;
           }
 #else
           num = allocated_devices[handle].shadow_value; // Fallback for testing
 #endif
+        } else if (d_type == 'D') {
+          long read_addr = (active_sub_addr != -1) ? active_sub_addr : 132; // Default: Present Position
+#ifdef TEST
+          num = mock_dxl_ram[handle][read_addr % 256];
+#else
+  #ifdef DYNAMIXEL_SUPPORT
+          num = dxl.readControlTableItem(read_addr, target_pin);
+  #else
+          num = 0;
+  #endif
+#endif
+          active_sub_addr = -1; // Consume the address!
         } else {
           num = allocated_devices[handle].shadow_value; 
         }
