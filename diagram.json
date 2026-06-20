@@ -10,14 +10,25 @@
       "top": 0,
       "left": 50,
       "attrs": { "R": "10", "Rexp": "2", "C": "0.1", "Cexp": "-3" }
+    },
+    {
+      "type": "wokwi-ds1307",
+      "id": "rtc1",
+      "top": -97.8,
+      "left": -242.1,
+      "rotate": 180,
+      "attrs": {}
     }
- 
   ],
   "connections": [
     [ "chip1:OUT", "pico:GP26", "orange", [ "h11.41", "v-20" ] ],
     [ "chip1:IN", "pico:GP22", "yellow", [ "h-38.4", "v0", "h-32.8" ] ],
     [ "pico:GND.5", "chip1:GND", "black", [ "v-5.2", "h48" ] ],
-    [ "pico:GP2", "pico:GP3", "green", [ "h-19.2", "v9.6" ] ]
+    [ "pico:GP2", "pico:GP3", "green", [ "h-19.2", "v9.6" ] ],
+    [ "pico:VBUS", "rtc1:5V", "red", [ "h29.11", "v-19.2", "h-172.8", "v66.8" ] ],
+    [ "pico:GND.2", "rtc1:GND", "black", [ "h-19.2", "v-38.4" ] ],
+    [ "pico:GP4", "rtc1:SDA", "purple", [ "h19.51", "v-38.4" ] ],
+    [ "pico:GP5", "rtc1:SCL", "blue", [ "h-28.8", "v-19.4" ] ]
   ],
   "dependencies": {}
 }

@@ -476,6 +476,27 @@ void runAllTests() {
           "65@d : 1\n"
           "b : 65@d\n", 'b', 1);
 
+  // TEST 39: I2C Multi-Byte Read & RAM Dereferencing
+  #if defined(ARDUINO_ARCH_RP2040)
+  Wire.setSDA(4); // Use a matching I2C0 pair!
+  Wire.setSCL(5);
+  #endif
+  Wire.begin();
+  
+  Wire.beginTransmission(104); // DS1307 Address
+  if (Wire.endTransmission() == 0) {
+    runTest("I2C Multi-Byte Read & Dereference", 
+            "c:D('i', 5, 4, 104)\n" // SCL=5, SDA=4
+            "r:16\n"
+            "0@c : 45\n"   
+            "1@c : 59\n"   
+            "a : 0 @ 2 c\n" 
+            "b : a @ 1\n"   
+            "r:10\n", 'b', 89); 
+  } else {
+    DEBUG_SERIAL.println("[SKIP] I2C Bus Target (Wokwi DS1307 at 0x68 not responding)");
+  }
+
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);
 }

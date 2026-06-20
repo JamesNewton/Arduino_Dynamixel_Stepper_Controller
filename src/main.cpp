@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h> // I2C support.
 #define TEST // Comment this line out to compile for REAL hardware!
 
 #ifndef TEST
@@ -374,34 +375,45 @@ long allocateDevice(char dev_type, int arg_start) {
   
   allocated_devices[next_device_index].type = dev_type;
   switch (dev_type) {
-    case 'A':
+    case 'A': //Analog Input. Arguments: (Type, Pin) or use A.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       pinMode(allocated_devices[next_device_index].pinA, INPUT);
       break;
-    case 'F':
+    case 'F': //EEPROM. Arguments: (Type) or use F.
       eeprom_ptr = 0; 
 #ifdef TEST
       mock_eeprom[0] = '\0';
 #endif
       break;
-    case 'I':
+    case 'i': //I2C Bus. Arguments: (Type, SclPin, SdaPin)
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1]; // SCL
+      allocated_devices[next_device_index].pinB = stack[arg_start + 2]; // SDA
+      allocated_devices[next_device_index].shadow_value = stack[arg_start + 3]; // I2C Target Address
+      // On RP2040, we map the I2C pins dynamically
+      #if defined(ARDUINO_ARCH_RP2040)
+      Wire.setSCL(allocated_devices[next_device_index].pinA);
+      Wire.setSDA(allocated_devices[next_device_index].pinB);
+      #endif
+      Wire.begin();
+      break;
+    case 'I': //Digital Input. Arguments: (Type, Pin, Pull) or use I, or U.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       if (stack[arg_start + 2] == 1) pinMode(allocated_devices[next_device_index].pinA, INPUT_PULLUP);
       else pinMode(allocated_devices[next_device_index].pinA, INPUT);
       break;
-    case 'O':
+    case 'O': //Digital Output. Arguments: (Type, Pin, Value) or use H, L.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
       digitalWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
-    case 'P':
+    case 'P': //PWM Output. Arguments: (Type, Pin, Value) or use P.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
       analogWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
-    case 'R':
+    case 'R': //Servo. Arguments: (Type, Pin, Value) or use R.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       mock_servos[allocated_devices[next_device_index].pinA] = allocated_devices[next_device_index].shadow_value;
@@ -410,7 +422,7 @@ long allocateDevice(char dev_type, int arg_start) {
       physical_servos[allocated_devices[next_device_index].pinA].write(allocated_devices[next_device_index].shadow_value);
 #endif
       break;
-    case 'S':
+    case 'S': //Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
       //TODO: check current_arg_count to ensure we have enough parameters.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].pinB = stack[arg_start + 2];
@@ -429,7 +441,7 @@ long allocateDevice(char dev_type, int arg_start) {
       physical_steppers[next_device_index]->setAcceleration(stack[arg_start + 4]);
 #endif
       break;
-    case 'D':
+    case 'D': //Dynamixel Servo. Arguments: (Type, ServoID, Baudrate)
       allocated_devices[next_device_index].pinA = stack[arg_start + 1]; // Servo ID
       allocated_devices[next_device_index].shadow_value = 0; 
 #ifdef DYNAMIXEL_SUPPORT
@@ -555,16 +567,27 @@ void doop() {
   #endif
 #endif
               active_sub_addr = -1; // Consume the address
+            } else if (d_type == 'i') {
+              long write_addr = (active_sub_addr != -1) ? active_sub_addr : 0;
+              int i2c_addr = allocated_devices[handle].shadow_value;
+              Wire.beginTransmission(i2c_addr);
+              Wire.write(write_addr);
+              Wire.write(num);
+              Wire.endTransmission();
+              active_sub_addr = -1; // Consume the address!
             }
           } //end of src is NOT DEV or CODE, device?
-        } else {
-          // No device attached. If the incoming source is an allocated device handle OR Code Handle,
-          // migrate the handle configuration and its type properties directly into this register
+        } else { // No device attached.
+          if (active_sub_addr != -1) {
+            // RAM DEREFERENCE: active_sub_addr holds the base pointer, num holds the offset.
+            num = code_ram[active_sub_addr + num];
+            active_sub_addr = -1;
+          }
           if (src.meta.type == TYPE_DEV || src.meta.type == TYPE_CODE) {
             vars[dst.meta.value].meta.type = src.meta.type;
             vars[dst.meta.value].meta.value = src.meta.value;
           } else {
-            *target = num; // Standard variable literal assignment
+            *target = num; 
           }
         }
       } //END OF dest is TYPE_REG
@@ -904,6 +927,7 @@ void processChar(char c) {
       else if (vars[regIndex].meta.type == TYPE_CODE) {
         src.meta.type = TYPE_CODE;
         src.meta.value = vars[regIndex].meta.value;
+        num = vars[regIndex].meta.value; // Allow pointers to be offset!
       }
       // Live Hardware Resolution
       else if (vars[regIndex].meta.type == TYPE_DEV) {
@@ -913,6 +937,30 @@ void processChar(char c) {
 
         if (d_type == 'I') {
           num = digitalRead(target_pin);
+        } else if (d_type == 'i') {
+          long read_addr = (active_sub_addr != -1) ? active_sub_addr : 0; 
+          int bytes_to_read = (num > 0) ? num : 1; 
+          int i2c_addr = allocated_devices[handle].shadow_value;
+          
+          Wire.beginTransmission(i2c_addr);
+          Wire.write(read_addr);
+          Wire.endTransmission();
+          Wire.requestFrom(i2c_addr, bytes_to_read);
+          
+          if (bytes_to_read == 1) {
+            num = Wire.available() ? Wire.read() : 0;
+          } else {
+            // Stream directly into volatile RAM
+            int start_ptr = code_ptr;
+            for(int i=0; i<bytes_to_read; i++) {
+              code_ram[code_ptr++] = Wire.available() ? Wire.read() : 0;
+            }
+            // Package the RAM pointer back into num and source
+            src.meta.type = TYPE_CODE;
+            src.meta.value = start_ptr;
+            num = start_ptr; 
+          }
+          active_sub_addr = -1; // Consume the address!
         } else if (d_type == 'A') {
           num = analogRead(target_pin);
         } else if (d_type == 'R') {
