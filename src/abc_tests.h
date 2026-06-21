@@ -42,6 +42,11 @@ void resetTestState(bool wipe_eeprom = true) {
   loop_depth = 0; 
   pc_ptr = nullptr;
   code_ptr = 0; 
+  frame_pointer = 0;
+  current_arg_count = 0;
+  call_depth = 0;
+  scope_frame_pointer = 0;
+  scope_arg_count = 0;
   quote_pending = false; 
   in_string_literal = false;
   in_char_literal = false;
@@ -347,7 +352,9 @@ void runAllTests() {
   frame_pointer = 0;
   current_arg_count = 2;
   call_depth = 1; // SPOOF WE ARE INSIDE A FUNCTION
-  
+  scope_frame_pointer = 0;
+  scope_arg_count = 2;
+
   // Try to copy 'a' to 'c'. If shadowing works, 'c' becomes 77, not 0
   evaluateABC("c:a\n"); 
   if (vars['c'-'a'].meta.value == 77) {
@@ -485,14 +492,17 @@ void runAllTests() {
   
   Wire.beginTransmission(104); // DS1307 Address
   if (Wire.endTransmission() == 0) {
+    Wire.end();
     runTest("I2C Multi-Byte Read & Dereference", 
-            "c:D('i', 5, 4, 104)\n" // SCL=5, SDA=4
-            "r:16\n"
-            "0@c : 45\n"   
-            "1@c : 59\n"   
-            "a : 0 @ 2 c\n" 
-            "b : a @ 1\n"   
-            "r:10\n", 'b', 89); 
+            "i:D('i', 5, 4, 104)\n" // SCL=5, SDA=4
+            "r:16\n" // NOTE: registers a-f are now digits
+            "0@i : 45\n"
+            "2000 W\n"
+            "1@i : 59\n"
+            "2000 W\n"
+            "x : 0 @ 2 i\n" // Use 'x' instead of 'a'
+            "y : x @ 1\n"   // Use 'y' instead of 'b'
+            "r:10\n", 'y', 89); 
   } else {
     DEBUG_SERIAL.println("[SKIP] I2C Bus Target (Wokwi DS1307 at 0x68 not responding)");
   }

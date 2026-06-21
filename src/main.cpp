@@ -189,6 +189,8 @@ long stack[256];            // The actual memory stack
 int frame_pointer = 0;      // Points to start of arguments in the current call
 int current_arg_count = 0;  // How many args in the current scope
 int call_depth = 0;         // Are we inside a subroutine?
+int scope_frame_pointer = 0;
+int scope_arg_count = 0;
 
 char code_ram[1024]; // Volatile dictionary for user functions
 int code_ptr = 0;
@@ -307,8 +309,8 @@ void rebootDynamixelServo(int id, int mode) { //setup servo id number into mode.
 
 long* getVarPtr(int regIndex) {
   // Shadow parameters if inside a function call
-  if (call_depth > 0 && regIndex < current_arg_count) {
-    return &stack[frame_pointer + regIndex];
+  if (call_depth > 0 && regIndex < scope_arg_count) {
+    return &stack[scope_frame_pointer + regIndex];
   }
   return (long*)&vars[regIndex].meta.value;
 }
@@ -483,6 +485,15 @@ void executeReturn() {
   num = ret_val; 
   src.raw = 0;   
   call_depth--;
+  //DEBUG_SERIAL.printf("[RETURN] ret_val=%ld. returning to caller depth=%d\r\n", ret_val, call_depth);
+  // Restore lexical scope to the caller
+  if (call_depth > 0) {
+    scope_frame_pointer = frame_pointer;
+    scope_arg_count = current_arg_count;
+  } else {
+    scope_frame_pointer = 0;
+    scope_arg_count = 0;
+  }
 }
 
 void doop() {
@@ -537,7 +548,9 @@ void doop() {
             while (*str) devWrite(handle, *str++);
           } else { //src is not DEV or CODE. Must be a device?
             // Standard hardware parameter write (e.g., Output Pin, Servo Angle)
-            allocated_devices[handle].shadow_value = num; // Keep internal tracker aligned
+            if (d_type != 'i') {
+              allocated_devices[handle].shadow_value = num; // Keep internal tracker aligned
+            }
             uint8_t target_pin = allocated_devices[handle].pinA;
             if (d_type == 'O') {
               digitalWrite(target_pin, num);
@@ -581,6 +594,7 @@ void doop() {
           if (active_sub_addr != -1) {
             // RAM DEREFERENCE: active_sub_addr holds the base pointer, num holds the offset.
             num = code_ram[active_sub_addr + num];
+            //DEBUG_SERIAL.printf("[RAM DEREF] BasePtr: %ld, Offset: %ld, Got: %d\r\n", active_sub_addr, num, code_ram[active_sub_addr + num]);
             active_sub_addr = -1;
           }
           if (src.meta.type == TYPE_DEV || src.meta.type == TYPE_CODE) {
@@ -715,6 +729,7 @@ void processChar(char c) {
   if (c == '@') {
     active_sub_addr = num;
     num = 0; // Clear accumulator for the upcoming device handle
+    src.raw = 0;
     return;
   }
 
@@ -812,10 +827,11 @@ void processChar(char c) {
     stack[sp++] = state_flags;
     stack[sp++] = frame_pointer;      // Save caller's frame
     stack[sp++] = current_arg_count;  // Save caller's arg count
-    
+    //DEBUG_SERIAL.printf("[CALL START] Pushed frame=%d, arg_count=%d. New sp=%d\r\n", frame_pointer, current_arg_count, sp);
     frame_pointer = sp; // New frame starts here
     src_dst = true;     // Ensure arguments are evaluated as sources
     current_arg_count = 0;
+    num = 0;
     return;
   }
 
@@ -832,9 +848,12 @@ void processChar(char c) {
   if (c == ')') {
     stack[sp++] = num;
     current_arg_count++;
-
+    // Retrieve the function pointer we saved on the stack
+    ABCState func_src;
+    func_src.raw = stack[frame_pointer - 4];
+    //DEBUG_SERIAL.printf("[CALL EXEC] Passed num=%ld. Jmp to ptr=%d. scope_arg_count=%d\r\n", num, func_src.meta.value, current_arg_count);
     // COMPLEX DEVICE SYSTEM CALL MANAGER ('D')
-    if (src.meta.type == TYPE_FUNC && src.meta.value == 'D') {
+    if (func_src.meta.type == TYPE_FUNC && func_src.meta.value == 'D') {
      // Find where our arguments begin on the stack frame
       int arg_start = sp - current_arg_count;
       char dev_type = (char)stack[arg_start]; 
@@ -860,18 +879,19 @@ void processChar(char c) {
       return;
     }
     // USER-DEFINED BYTECODE FUNCTIONS
-    else if (src.meta.type == TYPE_CODE) {
+    else if (func_src.meta.type == TYPE_CODE) {
       stack[sp++] = (long)pc_ptr; // Push Return Address to the stack
       
       // OFFSET BY -1 because the evaluateABC loop will automatically do pc_ptr++ right after this
-      pc_ptr = &code_ram[src.meta.value] - 1; 
+      pc_ptr = &code_ram[func_src.meta.value] - 1; 
+      
+      // Lock in the lexical scope for the new function!
+      scope_frame_pointer = frame_pointer;
+      scope_arg_count = current_arg_count;
       
       // Clean the active VM state so the function starts fresh
-      op = 0;
-      src_dst = false;
-      dst.raw = 0;
-      src.raw = 0;
-      num = 0;
+      op = 0; src_dst = false; dst.raw = 0; src.raw = 0; num = 0;
+      current_arg_count = 0;
       call_depth++;
       return;
     }
@@ -916,9 +936,9 @@ void processChar(char c) {
       
       // Parameter Shadowing:
       // If inside a function and index is a parameter, strictly use parameter value
-      if (call_depth > 0 && regIndex < current_arg_count) {
-        num = stack[frame_pointer + regIndex];
-      } 
+      if (call_depth > 0 && regIndex < scope_arg_count) {
+        num = stack[scope_frame_pointer + regIndex];
+      }
       // Special Register 'q' - Queue Length
       else if (regIndex == 'q' - 'a') {
         num = rx_head - rx_tail;
@@ -944,9 +964,9 @@ void processChar(char c) {
           
           Wire.beginTransmission(i2c_addr);
           Wire.write(read_addr);
-          Wire.endTransmission();
+          Wire.endTransmission(false);
           Wire.requestFrom(i2c_addr, bytes_to_read);
-          
+          //DEBUG_SERIAL.printf("[I2C READ] Target: %d, Reg: %ld, Req: %d, Avail: %d\r\n", i2c_addr, read_addr, bytes_to_read, Wire.available());
           if (bytes_to_read == 1) {
             num = Wire.available() ? Wire.read() : 0;
           } else {
