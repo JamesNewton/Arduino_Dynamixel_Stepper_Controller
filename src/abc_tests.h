@@ -25,10 +25,9 @@ void resetTestState(bool wipe_eeprom = true) {
     vars[i].raw = 0;
     vars[i].meta.type = TYPE_REG; // Set type metadata
   }
-  for(int i=0; i<30; i++) {
+  for(int i=0; i<NUM_DIGITAL_PINS; i++) {
     pin_shadow[i] = 0;
     pin_type[i] = 0;
-    mock_servos[i] = 0;
   }
   radix = 10; 
   num = 0; 
@@ -89,30 +88,6 @@ void runMatchTest(const char* testName, const char* target, bool expectedResult,
   }
 }
 
-void runMatcherSuite() {
-  // 1. Exact Match
-  setupMatchTest("hello");
-  runMatchTest("Exact Match", "hello", true, 5);
-
-  // 2. Early Mismatch (Leaves tail untouched)
-  setupMatchTest("hi");
-  runMatchTest("Early Mismatch", "hello", false, 0);
-
-  // 3. Late Mismatch (Leaves tail untouched)
-  setupMatchTest("hellx");
-  runMatchTest("Late Mismatch", "hello", false, 0);
-
-  // 4. Sequential Matches
-  setupMatchTest("helloworld");
-  runMatchTest("Sequential Match 1", "hello", true, 5);
-  runMatchTest("Sequential Match 2", "world", true, 10);
-
-  // 5. Ring Buffer Wrap-Around
-  // Buffer size is 64. If we start at 62, "hello" writes to 62, 63, 0, 1, 2.
-  setupMatchTest("hello", 62);
-  runMatchTest("Ring Buffer Wrap-Around", "hello", true, 67);
-}
-
 void printCodeIndented(const char* code) {
   DEBUG_SERIAL.print("       Code: ");
   while (*code) {
@@ -165,7 +140,7 @@ void runHardwareTest(const char* testName, const char* code, int checkPin, long 
   resetTestState();
   evaluateABC(code);
 
-  long actualValue = isServo ? mock_servos[checkPin] : pin_shadow[checkPin];
+  long actualValue = isServo ? physical_servos[checkPin].read() : pin_shadow[checkPin];
   
   if (actualValue == expectedValue) {
     DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
@@ -263,7 +238,6 @@ void runAllTests() {
   testCount = 0;
   passCount = 0;
   DEBUG_SERIAL.println("\r\n--- ABC Language Test Harness ---");
-  runMatcherSuite();
 
   // --- HARDWARE IN THE LOOP (HIL) TESTS ---
   pinMode(2, OUTPUT);
@@ -280,13 +254,48 @@ void runAllTests() {
   evaluateABC("3P I\n");
   runTest("HIL: Active DigIn High Read", "2H\n1000 W\na:3I\n", 'a', 1);
   runTest("HIL: Active DigIn Low Read", "2L\n1000 W\nb:3I\n", 'b', 0);
-  runAnalogTest("HIL: PWM/Analog 1", "22P:127\n500000W\nc:26A\n", 'c', 512, 25);
+  runAnalogTest("HIL: PWM/Analog 1", "22P:127\n1000000W\nc:26A\n", 'c', 512, 25);
   runAnalogTest("HIL: PWM/Analog 2", "22P:63\n500000W\nc:26A\n", 'c', 256, 20);
 
-  runTest("Device: Digital I/O Handle Move", "o:D('O',2,1)\n1000 W\ni:D('I',3,0)\na:i\n", 'a', 1);
-  runTest("Device: Digital Write Toggle", "o:D('O',2,1)\ni:D('I',3,0)\no:0\n1000 W\nb:i\n", 'b', 0);
+  runTest(
+    "Device: Digital I/O Handle Move", 
+    "o:D('O',2,1)\n1000 W\ni:D('I',3,0)\na:i\n", 
+    'a', 1
+  );
+  runTest(
+    "Device: Digital Write Toggle", 
+    "o:D('O',2,1)\ni:D('I',3,0)\no:0\n1000 W\nb:i\n", 
+    'b', 0
+  );
   runAnalogTest("Device: PWM/Analog", "o:D('P',22,127)\ni:D('A',26)\n500000 W\nc:i\n", 'c', 512, 20);
-  runHardwareTest("Device: RC Servo Target Stability", "v:D('R',2,90)\nv:120\n", 2, 120, true);
+  runHardwareTest(
+    "Device: RC Servo Target Stability", 
+    "v:D('R',28,90)\nv:120\n", 
+    28, 120, true
+  );
+
+  // --- INPUT MATCHER TESTS ---
+  // 1. Exact Match
+  setupMatchTest("hello");
+  runMatchTest("Exact Match", "hello", true, 5);
+
+  // 2. Early Mismatch (Leaves tail untouched)
+  setupMatchTest("hi");
+  runMatchTest("Early Mismatch", "hello", false, 0);
+
+  // 3. Late Mismatch (Leaves tail untouched)
+  setupMatchTest("hellx");
+  runMatchTest("Late Mismatch", "hello", false, 0);
+
+  // 4. Sequential Matches
+  setupMatchTest("helloworld");
+  runMatchTest("Sequential Match 1", "hello", true, 5);
+  runMatchTest("Sequential Match 2", "world", true, 10);
+
+  // 5. Ring Buffer Wrap-Around
+  // Buffer size is 64. If we start at 62, "hello" writes to 62, 63, 0, 1, 2.
+  setupMatchTest("hello", 62);
+  runMatchTest("Ring Buffer Wrap-Around", "hello", true, 67);
 
 
   // TEST 1: Basic Assignment (Destination, Operation, Number)
@@ -317,7 +326,7 @@ void runAllTests() {
   runHardwareTest("Analog PWM Output", "5P:128\n", 5, 128);
 
   // TEST 10: Servo Output
-  runHardwareTest("Servo Position", "2R:90\n", 2, 90, true);
+  runHardwareTest("Servo Position", "28R:90\n", 28, 90, true);
 
   // TEST 11: Radix Switching (Base 16)
   // Set radix to 16, then load hex "10" into 'g'. We can't use 'a' because a-f  
@@ -493,16 +502,19 @@ void runAllTests() {
   Wire.beginTransmission(104); // DS1307 Address
   if (Wire.endTransmission() == 0) {
     Wire.end();
-    runTest("I2C Multi-Byte Read & Dereference", 
-            "i:D('i', 5, 4, 104)\n" // SCL=5, SDA=4
-            "r:16\n" // NOTE: registers a-f are now digits
-            "0@i : 45\n"
-            "2000 W\n"
-            "1@i : 59\n"
-            "2000 W\n"
-            "x : 0 @ 2 i\n" // Use 'x' instead of 'a'
-            "y : x @ 1\n"   // Use 'y' instead of 'b'
-            "r:10\n", 'y', 89); 
+    runTest(
+      "I2C Multi-Byte Read & Dereference", 
+      "i:D('i', 5, 4, 104)\n" // SCL=5, SDA=4
+      "r:16\n" // NOTE: registers a-f are now digits
+      "0@i : 45\n"
+      "2000 W\n"
+      "1@i : 59\n"
+      "2000 W\n"
+      "x : 0 @ 2 i\n" // Use 'x' instead of 'a'
+      "y : x @ 1\n"   // Use 'y' instead of 'b'
+      "r:10\n", 
+      'y', 89
+    ); 
   } else {
     DEBUG_SERIAL.println("[SKIP] I2C Bus Target (Wokwi DS1307 at 0x68 not responding)");
   }

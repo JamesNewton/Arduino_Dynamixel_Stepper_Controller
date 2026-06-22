@@ -1,11 +1,10 @@
 #include <Arduino.h>
 #include <Wire.h> // I2C support.
+#include <Servo.h>
 #define TEST // Comment this line out to compile for REAL hardware!
 
 #ifndef TEST
 #include <EEPROM.h>
-#include <Servo.h>
-Servo physical_servos[NUM_DIGITAL_PINS]; 
 #endif
 
 /*
@@ -245,7 +244,7 @@ long mock_dxl_ram[MAX_DEVICES][DYNAMIXEL_CTRL_TABLE_LENGTH];
 // Simulates control table
 #endif
 int eeprom_ptr = 0;
-long mock_servos[NUM_DIGITAL_PINS];  // Stores servo angles
+Servo physical_servos[NUM_DIGITAL_PINS]; 
 
 #ifdef STEPPER_SUPPORT
 #include <AccelStepper.h>
@@ -415,14 +414,11 @@ long allocateDevice(char dev_type, int arg_start) {
       pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
       analogWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
-    case 'R': //Servo. Arguments: (Type, Pin, Value) or use R.
+    case 'R': // Servo. Arguments: (Type, Pin, Value) or use R.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
-      mock_servos[allocated_devices[next_device_index].pinA] = allocated_devices[next_device_index].shadow_value;
-#ifndef TEST
       physical_servos[allocated_devices[next_device_index].pinA].attach(allocated_devices[next_device_index].pinA);
       physical_servos[allocated_devices[next_device_index].pinA].write(allocated_devices[next_device_index].shadow_value);
-#endif
       break;
     case 'S': //Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
       //TODO: check current_arg_count to ensure we have enough parameters.
@@ -509,8 +505,10 @@ void doop() {
     case ':':
       if (dst.meta.type == TYPE_PIN) {
         if (pin_type[dst.meta.value] == 'R') {
-          mock_servos[dst.meta.value] = num;
-          // REAL HARDWARE: servo[dst.meta.value].write(num);
+          if (!physical_servos[dst.meta.value].attached()) {
+            physical_servos[dst.meta.value].attach(dst.meta.value);
+          }
+          physical_servos[dst.meta.value].write(num);
         } else {
           pin_shadow[dst.meta.value] = num; 
           pinMode(dst.meta.value, OUTPUT);
@@ -557,10 +555,7 @@ void doop() {
             } else if (d_type == 'P') {
               analogWrite(target_pin, num);
             } else if (d_type == 'R') {
-              mock_servos[target_pin] = num;
-#ifndef TEST
               physical_servos[target_pin].write(num);
-#endif
             } else if (d_type == 'S') {
 #ifdef STEPPER_SUPPORT
               if (physical_steppers[handle]) {
@@ -681,14 +676,11 @@ void doop() {
 
     case 'R': // Immediate inline Servo Operation modifier (e.g. 1R90)
       if (dst.meta.type == TYPE_PIN) {
-        mock_servos[dst.meta.value] = num;
         pin_type[dst.meta.value] = 'R';
-#ifndef TEST
         if (!physical_servos[dst.meta.value].attached()) {
           physical_servos[dst.meta.value].attach(dst.meta.value);
         }
         physical_servos[dst.meta.value].write(num);
-#endif
       }
       break;
   }
@@ -984,7 +976,7 @@ void processChar(char c) {
         } else if (d_type == 'A') {
           num = analogRead(target_pin);
         } else if (d_type == 'R') {
-          num = mock_servos[target_pin]; 
+          num = physical_servos[target_pin].read(); 
         } else if (d_type == 'S') {
 #ifdef STEPPER_SUPPORT
           if (physical_steppers[handle]) {
@@ -1043,7 +1035,7 @@ void processChar(char c) {
     } else {        
       src.meta.type = TYPE_PIN;
       src.meta.value = num;
-      num = (c == 'R') ? mock_servos[num] : pin_shadow[num]; 
+      num = (c == 'R') ? physical_servos[num].read() : pin_shadow[num]; 
     }
     return;
   }
