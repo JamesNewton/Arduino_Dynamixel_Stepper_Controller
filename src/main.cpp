@@ -8,13 +8,7 @@
 #endif
 
 /*
-Goals 
-- get close to a high level language, w/ understandable syntax, without including a compiler, 
-- using the minimum resources possible to interpret the bytecodes. 
-- The main pattern is: Destination, [Operation, Source ...], e.g. a=b+c-d. 
-- The regular keywords in a language are single characters, making use of punctuation
-
-0-9 (and lowercase a and on when radix is over 10) these accumulate base 'r' digits into num 
+0-9 (and lowercase a and on when radix is over 10) these accumulate base 'r' digits into NUM 
 a-z Variables/Registers (SRC or DST). Some registers have special meanings:
    p Program Counter aka PC.
    q Queue length (RX ring buffer). Read/Write to manage incoming stream.
@@ -22,7 +16,7 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
    s Stack Pointer aka SP.
    t Terminal Device (Default serial output/input).
   Might not be contiguous in the array. e.g. while a is 0. b could be register 4, c 8, etc..
-:	Copy operation, e.g. "define" a:5 sets register 0 to 5. a:b copies the value of b to register 0.
+:	Copy operation, aka assignment. a:5 sets register 0 to 5. a:b copies the value of b to register 0.
 	NUM may be added to the register address first. 3a could be the third byte after the start of a. 
 @	index. Set an address for a device (dynamixel, I2C, etc...) or an offset for an array.
 ' (Single Quote) ASCII literal. Next character is its numeric decimal value ('A' is 65).
@@ -32,7 +26,7 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
 	If the operation was already " when a new starting " is seen, 
 	put a " to the dest then enter text mode. "Push ""START""" prints Push "START"
   Can also be used to match incomming text. e.g. t="HELLO"?t:"HI"
-%	Maybe converts the value of source to digits (radix r) and copies it to DST
+%	Format. converts the value of source to digits (radix r) and copies it to DST
   TODO: Use previous num as length and following num as precision. e.g. 8%2a
 +	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
 	TODO: if there is no SRC, the NUM is used as the SRC. a+1 increments a.
@@ -197,6 +191,8 @@ bool quote_pending = false; // For detecting "" escapes
 bool in_string_literal = false;
 bool in_char_literal = false; // For parsing 'm'
 long num = 0;                 // Numeric accumulator
+int format_width = 0; 
+int format_prec = 0;
 
 ABCState dst; // Current Destination
 ABCState src; // Current Source
@@ -602,30 +598,56 @@ void doop() {
       } //END OF dest is TYPE_REG
       break;
 
-    case '%': // FORMATTING OPERATOR
+case '%': // FORMATTING OPERATOR
       {
         int handle = -1;
-        // Resolve handle if accessed via raw device OR via variable proxy
-        if (dst.meta.type == TYPE_DEV) {
-          handle = dst.meta.value;
-        } else if (dst.meta.type == TYPE_REG && vars[dst.meta.value].meta.type == TYPE_DEV) {
+        if (dst.meta.type == TYPE_DEV) handle = dst.meta.value;
+        else if (dst.meta.type == TYPE_REG && vars[dst.meta.value].meta.type == TYPE_DEV) {
           handle = vars[dst.meta.value].meta.value;
         }
         
         if (handle != -1) {
           if (src.meta.type == TYPE_CODE) {
-            // Dump the function definition wrapped in quotes!
             devWrite(handle, '"');
             const char* str = &code_ram[src.meta.value];
             while (*str) devWrite(handle, *str++);
             devWrite(handle, '"');
           } else {
-            // Format numeric accumulator into string using current radix
-            char numStr[33];
-            ltoa(num, numStr, radix);
-            for (int i = 0; numStr[i] != '\0'; i++) {
-              devWrite(handle, numStr[i]);
+            // FIXED-POINT VIRTUAL DECIMAL FORMATTING
+            bool is_neg = (num < 0);
+            long val = is_neg ? -num : num;
+            
+            char rawStr[33];
+            ltoa(val, rawStr, radix);
+            int rawLen = strlen(rawStr);
+            
+            char outStr[64];
+            int outIdx = 0;
+            
+            // Calculate how many leading zeros we need for the decimal
+            int leading_zeros = format_prec > rawLen ? format_prec - rawLen : 0;
+            if (format_prec >= rawLen) leading_zeros++; 
+            
+            // Calculate padding
+            int total_chars = rawLen + leading_zeros + (format_prec > 0 ? 1 : 0) + (is_neg ? 1 : 0);
+            while (format_width > total_chars) {
+              outStr[outIdx++] = ' ';
+              format_width--;
             }
+            
+            // Build the string
+            if (is_neg) outStr[outIdx++] = '-';
+            for (int i = 0; i < leading_zeros; i++) outStr[outIdx++] = '0';
+            for (int i = 0; i < rawLen; i++) {
+              if (format_prec > 0 && i == rawLen - format_prec) outStr[outIdx++] = '.';
+              outStr[outIdx++] = rawStr[i];
+            }
+            outStr[outIdx] = '\0';
+            
+            // Stream it to the device
+            for (int i = 0; outStr[i] != '\0'; i++) devWrite(handle, outStr[i]);
+            format_width = 0; 
+            format_prec = 0; 
           }
         }
       }
@@ -907,6 +929,15 @@ void processChar(char c) {
     num += (c - 'a' + 10);
     return;
   }
+  // Formatting Operator Modifier (%)
+  if (c == '%') {
+    doop(); // Execute any pending left-side operations
+    format_width = num; // Catch the width, if any, placed before the %
+    num = 0;            // Clear accumulator for the precision
+    op = '%';           
+    src_dst = true;     
+    return;
+  }
 
   // Identify Variables / Registers (a-z)
   if (c >= 'a' && c <= 'z') {
@@ -923,6 +954,9 @@ void processChar(char c) {
       }
     } else {
       // Looking for source
+      if (op == '%') {
+        format_prec = num; // Catch the precision, if any, placed after the %
+      }
       src.meta.type = TYPE_REG;
       src.meta.value = regIndex;
       

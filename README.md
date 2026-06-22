@@ -1,23 +1,28 @@
 # ABC Device Peripheral
 
-This branch is the language version of the controller. 
+This is just an Arduino script, targeting the pi pico, to set pins high, low, input, pull up, or analog/rc servo, and control steppers, dynamixels, and more. And a bit more.
 
-It is a simple Arduino script, targeting the pi pico, to set pins high, low, input, pull up, or analog/rc servo, and control steppers, dynamixels, and more.
+- Not something you have to re-program to support different devices; Everything is already there. It's a REPL; a live environment. You type instructions, the hardware / devices responds. However, it can use the EEPROM to remember and re-play instructions, which are pretty capable. 
 
-- Not something you have to re-program; it's a REPL or live environment although it can use the EEPROM to remember and re-play instructions, which are pretty capable. 
+- Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a Pi or other high level robot controller. 
 
-- Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a Pi or other high level robot controller. And it does not provide high level drivers for a fixed set of devices. It is more useful as means of developing drivers. 
+**LANGUAGE**: This branch is the language version of the controller. The language goals are:
+- Get close to a high level language, w/ understandable syntax, without including a compiler, or a complex interpreter.
+- Use the minimum resources possible to interpret the bytecodes, focus on io with the devices. 
+- Follow the pattern: *Destination* [*Operation* *Source* ...], e.g. <BR>`a=b+c*d` (no operator presidence. a is (b+c)\*d, not b+(c\*d))
+- The regular keywords and variables are single characters, making use of punctuation. e.g. `if` is `?`, `return` is `.`
+
 
 Note: If SERVO_SUPPORT is enabled and the Dynamixel Shield is installed, then it does NOT communicate via the Arduino USB adapter during normal operation, it uses an external USB / TTL serial adapter instead because the Dynamixel is on the main Arduino serial port. If you don't need the servos, it will (probably) work with just the standard Arduino serial interface.
 
 ## DEMO:
 
-Get a pi pico, hold down the button, plug in the USB, drag and drop the .uf2 on it. 
+Get a pi pico, hold down the button, plug in the USB, release the button, drag and drop the .uf2 from the release on to it. 
 (or use whatever Arduino you like if you re-compile it... might work with an Uno if you disable the options)
 
 **GPIO:** Now open a terminal and type. Want the LED on? type: `13H` or whatever pin the LED is on followed by 'H' for "high". Turn it off with `13L`. 
 
-Read pin 3 with `t:3I` which sends pin 13 as an input to the terminal. Use `U` inste of `I` to enable pullup. Colon ':' is "assign"... equal '=' is comparison.
+Read pin 3 with `t:3I` which sets pin 13 as an input, reads it, and sends the result to the terminal, stored by default in 't'. Use `U` instead of `I` to enable pullup. Colon ':' is "assign"... equal '=' is comparison never assignment.
 ```
 6A=100?t:"YES"!t:"NO"
 ```

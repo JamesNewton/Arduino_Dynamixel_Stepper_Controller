@@ -49,6 +49,8 @@ void resetTestState(bool wipe_eeprom = true) {
   quote_pending = false; 
   in_string_literal = false;
   in_char_literal = false;
+  format_width = 0;
+  format_prec = 0;
   mock_out_ptr = 0;
   mock_out_buffer[0] = '\0';
   mock_out_ptr = 0;
@@ -518,6 +520,33 @@ void runAllTests() {
   } else {
     DEBUG_SERIAL.println("[SKIP] I2C Bus Target (Wokwi DS1307 at 0x68 not responding)");
   }
+
+  // TEST 40: Fixed-Point Virtual Decimal Formatting
+  // Assign 250 to 'a'. Format with Width 8, Precision 2. 
+  // 4 leading spaces + "2.50" = 8 total characters.
+  runStringTest(
+    "Virtual Decimal Format (Padding)", 
+    "a:250\nt:8%2a\n", 
+    "    2.50"
+  );
+
+  // TEST 41: Fixed-Point Decimal Formatting (Negative)
+  // Assign -250 to 'a'. Format with Width 8, Precision 2.
+  // 3 leading spaces + "-2.50" = 8 total characters.
+  runStringTest(
+    "Virtual Decimal Format (Negative)", 
+    "a:0-250\nt:8%2a\n", 
+    "   -2.50"
+  );
+
+  // TEST 42: Fixed-Point Decimal Formatting (Leading Zeros)
+  // Assign 5 to 'a'. Format with Width 0 (no padding), Precision 2.
+  // The formatter should automatically insert the leading '0.0'
+  runStringTest(
+    "Virtual Decimal Format (Leading Zeros)", 
+    "a:5\nt:0%2a\n", 
+    "0.05"
+  );
 
   DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);
