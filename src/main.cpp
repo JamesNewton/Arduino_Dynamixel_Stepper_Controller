@@ -621,31 +621,50 @@ case '%': // FORMATTING OPERATOR
             ltoa(val, rawStr, radix);
             int rawLen = strlen(rawStr);
             
-            char outStr[64];
-            int outIdx = 0;
+            char numBuf[64];
+            int nIdx = 0;
+            if (is_neg) numBuf[nIdx++] = '-';
             
-            // Calculate how many leading zeros we need for the decimal
-            int leading_zeros = format_prec > rawLen ? format_prec - rawLen : 0;
-            if (format_prec >= rawLen) leading_zeros++; 
-            
-            // Calculate padding
-            int total_chars = rawLen + leading_zeros + (format_prec > 0 ? 1 : 0) + (is_neg ? 1 : 0);
-            while (format_width > total_chars) {
-              outStr[outIdx++] = ' ';
-              format_width--;
+            // Integer Part
+            if (rawLen <= format_prec) {
+              numBuf[nIdx++] = '0'; // Leading zero before decimal
+            } else {
+              for (int i = 0; i < rawLen - format_prec; i++) {
+                numBuf[nIdx++] = rawStr[i];
+              }
             }
             
-            // Build the string
-            if (is_neg) outStr[outIdx++] = '-';
-            for (int i = 0; i < leading_zeros; i++) outStr[outIdx++] = '0';
-            for (int i = 0; i < rawLen; i++) {
-              if (format_prec > 0 && i == rawLen - format_prec) outStr[outIdx++] = '.';
-              outStr[outIdx++] = rawStr[i];
+            // Fractional Part
+            if (format_prec > 0) {
+              numBuf[nIdx++] = '.';
+              // Fractional leading zeros (e.g., turning 5 into .05)
+              for (int i = 0; i < format_prec - rawLen; i++) {
+                numBuf[nIdx++] = '0';
+              }
+              // Fractional trailing numbers
+              int start_idx = rawLen > format_prec ? rawLen - format_prec : 0;
+              for (int i = start_idx; i < rawLen; i++) {
+                numBuf[nIdx++] = rawStr[i];
+              }
+            }
+            numBuf[nIdx] = '\0';
+            
+            // Apply Padding Width
+            int numLen = strlen(numBuf);
+            int pad = format_width - numLen;
+            char outStr[64];
+            int outIdx = 0;
+            while (pad > 0) {
+              outStr[outIdx++] = ' ';
+              pad--;
+            }
+            for (int i = 0; i < numLen; i++) {
+              outStr[outIdx++] = numBuf[i];
             }
             outStr[outIdx] = '\0';
             
             // Stream it to the device
-            for (int i = 0; outStr[i] != '\0'; i++) devWrite(handle, outStr[i]);
+            for (int i = 0; outStr[i] != '\0'; i++) devWrite(handle, outStr[i]);           
             format_width = 0; 
             format_prec = 0; 
           }
@@ -931,9 +950,13 @@ void processChar(char c) {
   }
   // Formatting Operator Modifier (%)
   if (c == '%') {
-    doop(); // Execute any pending left-side operations
-    format_width = num; // Catch the width, if any, placed before the %
-    num = 0;            // Clear accumulator for the precision
+    if (op == ':') {
+      op = 0; // Cancel the standard assignment, upgrade it to a format operation
+    } else {
+      doop(); // Execute any other pending math
+    }
+    format_width = num; 
+    num = 0;            
     op = '%';           
     src_dst = true;     
     return;
