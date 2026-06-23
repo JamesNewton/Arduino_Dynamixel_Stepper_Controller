@@ -9,7 +9,7 @@ This is just an Arduino script, targeting the pi pico, to set pins high, low, in
 **LANGUAGE**: This branch is the language version of the controller. The language goals are:
 - Get close to a high level language, w/ understandable syntax, without including a compiler, or a complex interpreter.
 - Use the minimum resources possible to interpret the bytecodes, focus on io with the devices. 
-- Follow the pattern: *Destination* [*Operation* *Source* ...], e.g. <BR>`a=b+c*d` (no operator presidence. a is (b+c)\*d, not b+(c\*d))
+- Follow the pattern: *Destination* [*Operation* *Source* ...], e.g. <BR>`a:b+c*d` (no operator presidence. a is (b+c)\*d, not b+(c\*d))
 - The regular keywords and variables are single characters, making use of punctuation. e.g. `if` is `?`, `return` is `.`
 
 
@@ -28,7 +28,7 @@ Read pin 3 with `t:3I` which sets pin 13 as an input, reads it, and sends the re
 ```
 A for analog input, ? is the conditional bang '!' is else. 
 
-`4P:128` does an "analog" (actually PWM) out at 128 out max PWM.
+`4 P 128` does an "analog" (actually PWM) out at 128 out max PWM.
 
 **RC SERVOS**: But you can also talk to more complex hardware. e.g. `2R:90` sets up a servo output on pin 2 and runs it to 90 degrees. But then it will jerk a bit if you re-issue that command with `2R:91`. Better to setup a device: 
 ```
@@ -48,7 +48,7 @@ doesn't jerk.
 - 'q' sets the input buffer index for terminal input and matches (more on that later)
 - 'p' is the program counter, you can jump and crash. 
 
-e-o are (currently) safe, and u-z. 
+g-o are (currently) safe, and u-z. 
 
 **DEVICE DRIVERS**: Complex devices are setup via 'D'rivers which take in a type letter, and other parameters, usually the pin or pins, and whatever else is needed. For example, if you want to run run stepper motors
 `m:D('S', 3, 4, 1000, 5000)`
@@ -74,9 +74,10 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
 	If the operation was already " when a new starting " is seen, put a " into 
     the dest then enter text mode. "Push ""START""" prints Push "START"
     Can also be used to match incomming text. e.g. t="HELLO"?t:"HI"
-%	Format. converts the value of source to digits (radix r) and copies it to DST
+%	Format. Converts the value of source to digits (radix r) and copies it to DST
     Uses a previous num as length and following num as precision. 
     e.g. a:250;t:8%2a -> ____2.50
+    Also dumps FLASH to out. e.g. a:"HELLO"; t:%a; will print HELLO
 +	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
 	TODO: if there is no SRC, the NUM is used as the SRC. a+1 increments a.
 	maybe if last op was +, load 1 into NUM. a++ increments a.
@@ -102,9 +103,10 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
 [	Start loop
 ]	End loop if true flag is not set.
 .	return. Cleanup stack, restore PC.
+;   Line end. Same as \n
 A	set Port pin in SRC to read analog values in e.g. a:2A.
 D   Device. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details.
-J	(Jump) move NUM lines ?
+J	(Jump) move NUM lines TODO?
 I	(In) set the Port or Port pin in SRC to an Input. E.g. a:7I reads pin 7 to a
 H	(High) set the Pin in DST to high. e.g. 1H sets pin 1 high.
 L	(Low) set the Pin in DST to low.
@@ -113,7 +115,7 @@ P	(PWM) set Pin in DST to output PWM in SRC. e.g. 2P100
 R	(RC Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. 1R90
 T	(Terminal) set SRC or DST to the Serial port. 0x89
 U	(Up) set Pin in DST to inputs with internal pull-up
-W	wait. Delay for DST microseconds. Clears DST. e.g. 100DP0HLHL
+W	Wait. Delay for NUM microseconds. Clears DST. e.g. 100W 1H L H L
 
 Unused (for now)
 $	
@@ -127,7 +129,7 @@ Command | Description
 --- | ---
 D('A', *pin*) | Analog Input. `i:D('A',2);i>128?"High";`
 D('D', *id*, *baud*) |  Dynamixel Servo. No pin number because there is only one bus. Address the control table with the @ operator. e.g. `65@d:1` to turn on the LED. The default address is Goal Position on write, Current Position on read.
-D('i', *SCLpin*, *SDApin*, *address*)  | I2C Bus. Set address with @. `i:D('i', 5, 4, 104);1@i : 123` Write 123 to register 1 in the I2C device attached to pin 4 and 5 (SDA, SCL) with address 104. 
+D('i', *SCLpin*, *SDApin*, *address*)  | I2C Bus. Set address with @. `i:D('i', 5, 4, 104);1@i : 123` Write 123 to register 1 in the I2C device attached to pin 4 and 5 (SDA, SCL) with address 104. `x : 0 @ 2 i` streams 2 bytes into RAM, and `x @ 1` dereferences that memory
 D('I', *pin*, *pull*) | Digital Input use I, or U.
 D('O', *pin*, *value*) | Digital Output or use H, L. 
 D('P', *pin*, *value*) | PWM Output or use P.
@@ -136,7 +138,7 @@ D('R', *pin*, *angle*) |  RC Servo or use S.
 D('s', *MISOpin*, *MOSIpin*, *SCKpin*) |  SPI Bus. **TODO**
 D('S', *STEPpin*, *DIRpin*, *velocity*, *accel*)  |  Stepper Motor. Write a goal position. `m:D('S', 3, 4, 1000, 5000);m:100` Run the stepper driver connected to pins 3 and 4 (step and direction) forward 100 steps, at 1K steps per second, with an accelleration of 5K steps per second per second.
 D('U', *TXpin*, *RXpin*, *baud*) |  UART / Serial. **TODO**
-
+D('F') | Serialize variables, strings, and functions directly into non-volatile memory so they survive a reboot. 
 
 
 
