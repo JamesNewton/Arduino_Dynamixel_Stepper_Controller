@@ -57,7 +57,88 @@ pin 3 is step, 4 direction, and a max velocity of 1000 steps per second, 5000 ac
 Support is coming for I2C devices, encoders, and so on. 
 
 ## Commands
-see the [source code comment block](src/main.cpp) it's changing too fast to put here yet. 
+```
+0-9 (and lowercase a up when radix > 10) these accumulate base 'r' digits into NUM 
+a-z Variables/Registers (SRC or DST). Some registers have special meanings:
+    p Program Counter aka PC.
+    q Queue length (RX ring buffer). Read/Write to manage incoming stream.
+    r Radix (Default 10). >10 treat 'a' on as digits. e.g. a-f for hex if r=16.
+    s Stack Pointer aka SP.
+    t Terminal Device (Default serial output/input).
+:	Copy / assignment. a:5 sets register 0 to 5. a:b copies the value of b to a
+@	index. Address for a device (dynamixel, I2C, ...) or an offset for an array.
+'   (Single Quote) ASCII literal. Numeric decimal value of a char ('A' is 65).
+"	(Quote) Text. Each following char is copied to the DST until the ending quote.
+	If the DST is a variable, the chars are copied into memory and the var is
+	set to the starting address of the string in memory.
+	If the operation was already " when a new starting " is seen, put a " into 
+    the dest then enter text mode. "Push ""START""" prints Push "START"
+    Can also be used to match incomming text. e.g. t="HELLO"?t:"HI"
+%	Format. converts the value of source to digits (radix r) and copies it to DST
+    Uses a previous num as length and following num as precision. 
+    e.g. a:250;t:8%2a -> ____2.50
++	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
+	TODO: if there is no SRC, the NUM is used as the SRC. a+1 increments a.
+	maybe if last op was +, load 1 into NUM. a++ increments a.
+-	set operation to subtract
+&	set operation to bitwise AND. a-&b ANDs a with NOT b. 
+|	set operation to bitwise OR
+=	set compare type to equal
+<	set compare type to less than
+>	set compare type to greater than
+{	Less than or equal (ASCII value of '<' plus '=' less 63)
+}	Greater than or equal (ASCII value of '>' plus '=' less 63)
+~	Not. Toggle true/false flag. Use with greater less and equal. 
+    e.g. a<b~ will set the true flag if a is greater than or equal to b.
+    >~ is less than or equal too. <~ is greater than or equal too. =~ is not equal
+	perhaps change to ` (single back tick) (ASCII value of '!' plus '=' less 63)
+?	if. Skip to the next line or ! if the comparison fails (not TRUE) 
+    TODO: keep skipping indented lines.
+!	else. Skip to the next line if the comparison succeeded 
+    TODO: keep skipping indented lines. 
+(	parms. Prep for a function call by pushing state.
+,   push NUM as an argument to the stack and increment SP.  
+)	call. Push final argument, push PC, set PC to DST, calling the function
+[	Start loop
+]	End loop if true flag is not set.
+.	return. Cleanup stack, restore PC.
+A	set Port pin in SRC to read analog values in e.g. a:2A.
+D   Device. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details.
+J	(Jump) move NUM lines ?
+I	(In) set the Port or Port pin in SRC to an Input. E.g. a:7I reads pin 7 to a
+H	(High) set the Pin in DST to high. e.g. 1H sets pin 1 high.
+L	(Low) set the Pin in DST to low.
+	When the pin is an input, H and L set or clear TRUE based on the pins value.
+P	(PWM) set Pin in DST to output PWM in SRC. e.g. 2P100
+R	(RC Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. 1R90
+T	(Terminal) set SRC or DST to the Serial port. 0x89
+U	(Up) set Pin in DST to inputs with internal pull-up
+W	wait. Delay for DST microseconds. Clears DST. e.g. 100DP0HLHL
+
+Unused (for now)
+$	
+^	power? 
+_	label? sub-element?
+```
+Devices: These are the mnemonic character literals passed to the D (Device) 
+function to allocate and configure hardware peripherals:
+
+Command | Description
+--- | ---
+D('A', *pin*) | Analog Input. `i:D('A',2);i>128?"High";`
+D('D', *id*, *baud*) |  Dynamixel Servo. No pin number because there is only one bus. Address the control table with the @ operator. e.g. `65@d:1` to turn on the LED. The default address is Goal Position on write, Current Position on read.
+D('i', *SCLpin*, *SDApin*, *address*)  | I2C Bus. Set address with @. `i:D('i', 5, 4, 104);1@i : 123` Write 123 to register 1 in the I2C device attached to pin 4 and 5 (SDA, SCL) with address 104. 
+D('I', *pin*, *pull*) | Digital Input use I, or U.
+D('O', *pin*, *value*) | Digital Output or use H, L. 
+D('P', *pin*, *value*) | PWM Output or use P.
+D('Q', *pinA*, *pinB*) |  Quadrature Encoder **TODO**
+D('R', *pin*, *angle*) |  RC Servo or use S.
+D('s', *MISOpin*, *MOSIpin*, *SCKpin*) |  SPI Bus. **TODO**
+D('S', *STEPpin*, *DIRpin*, *velocity*, *accel*)  |  Stepper Motor. Write a goal position. `m:D('S', 3, 4, 1000, 5000);m:100` Run the stepper driver connected to pins 3 and 4 (step and direction) forward 100 steps, at 1K steps per second, with an accelleration of 5K steps per second per second.
+D('U', *TXpin*, *RXpin*, *baud*) |  UART / Serial. **TODO**
+
+
+
 
 
 ### BUILD:
