@@ -26,7 +26,7 @@ Read pin 3 with `t:3I` which sets pin 13 as an input, reads it, and sends the re
 ```
 6A=100?t:"YES"!t:"NO"
 ```
-A for analog input, ? is the conditional bang '!' is else. 
+A for analog input, `?` is the conditional bang `!` is else. 
 
 `4 P 128` does an "analog" (actually PWM) out at 128 out max PWM.
 
@@ -59,6 +59,7 @@ Support is coming for I2C devices, encoders, and so on.
 ## Commands
 ```
 0-9 (and lowercase a up when radix > 10) these accumulate base 'r' digits into NUM 
+    All numbers are 32 bit ints, no floats. See '%' below for fixed place.
 a-z Variables/Registers (SRC or DST). Some registers have special meanings:
     p Program Counter aka PC.
     q Queue length (RX ring buffer). Read/Write to manage incoming stream.
@@ -79,9 +80,8 @@ a-z Variables/Registers (SRC or DST). Some registers have special meanings:
     e.g. a:250;t:8%2a -> ____2.50
     Also dumps FLASH to out. e.g. a:"HELLO"; t:%a; will print HELLO
 +	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
-	TODO: if there is no SRC, the NUM is used as the SRC. a+1 increments a.
-	maybe if last op was +, load 1 into NUM. a++ increments a.
--	set operation to subtract
+	If there is no SRC, the NUM is used as the SRC. a+1 increments a.
+-	set operation to subtract. a:b+3 a becomes b plus 3. a-1 decrements a.
 &	set operation to bitwise AND. a-&b ANDs a with NOT b. 
 |	set operation to bitwise OR
 =	set compare type to equal
@@ -140,8 +140,25 @@ D('S', *STEPpin*, *DIRpin*, *velocity*, *accel*)  |  Stepper Motor. Write a goal
 D('U', *TXpin*, *RXpin*, *baud*) |  UART / Serial. **TODO**
 D('F') | Serialize variables, strings, and functions directly into non-volatile memory so they survive a reboot. 
 
+## Matching
+In addition to device and digital IO, we can do input stream pattern matching. 
+When the double quotes are at the start of the line (as a destination) they work
+to match incomming text. e.g. 
+```
+"hello"?t:"hi"
+"goodbye"?t:"laters"
+```
 
-
+The `q` register is used to control the input matching queue. Imagine the user just typed "hello" into the terminal. The ring buffer now holds 5 unread characters.
+```
+a:q; 'a' is assigned 5, because there are 5 chars ("hello") in the queue.
+q-1; We subtract 1 from 'q'. The VM pops the oldest char ('h'). 
+b:q; 'b' is assigned 4. The queue now holds "ello".
+q-3; We subtract 3 from 'q'. The VM pops 'e', 'l', and 'l'.
+c:q; 'c' is assigned 1. The queue now holds just "o".
+q:0; Assigning 0 to 'q' flushes the queue completely.
+```
+This feature is quite useful when combined with the string matching operator (=). If you are searching a data stream for a specific keyword but get a partial match or an irrelevant character, you can pop exactly the amount of characters you need to discard before checking the stream again.
 
 ### BUILD:
 
