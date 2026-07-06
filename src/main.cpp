@@ -19,6 +19,9 @@
 
 #define STEPPER_SUPPORT
 
+#define ENCODER_SUPPORT
+//#define USE_ANALOG_ENCODER // Comment this out to fall back to standard digital Encoder.h
+
 //#define EOT
 //sending EOT can help OS serial device drivers return data instead of waiting forever for the file to end.
 //https://stackoverflow.com/questions/50178789/signal-end-of-file-in-serial-communication
@@ -96,7 +99,8 @@ ABCState vars[26];   // Upgrade Registers 'a' through 'z' to Typed States
 #define sp    vars['s'-'a'].meta.value // Alias 's' to stack pointer payload value
 #define pc    vars['p'-'a'].meta.value // Alias 'p' to program counter payload value
 
-long stack[256];            // The actual memory stack
+#define STACK_SIZE 256
+long stack[STACK_SIZE];            // The actual memory stack
 int frame_pointer = 0;      // Points to start of arguments in the current call
 int current_arg_count = 0;  // How many args in the current scope
 int call_depth = 0;         // Are we inside a subroutine?
@@ -166,7 +170,73 @@ Servo physical_servos[NUM_DIGITAL_PINS];
 AccelStepper* physical_steppers[MAX_DEVICES] = {nullptr}; 
 #endif
 
-
+#ifdef ENCODER_SUPPORT
+    // --- HYBRID ANALOG ENCODER ---
+// https://github.com/JamesNewton/HybridDiskEncoder/tree/master#hybrid-disk-encoder
+  class AnalogEncoder {
+    private:
+      uint8_t pin_sin, pin_cos;
+      int32_t count;
+      int8_t old_state;
+      int32_t sincenter, coscenter;
+// Quadrature Encoder Matrix
+// Indexed by the bits AoBoAnBn 
+//Where A and B are the encoder outputs and o and n are old and new. 
+//e.g. Ao is the OLD value of A. See the read_encoder function below.
+//  0 = nop: no change
+//  1 = inc: increment (positive rotation)
+// -1 = dec: decrement (negative rotation)
+//  2 = err: error (both changed, so we missed a state)
+      int QEM [16] = { 
+//old new:0  1  2  3 //
+/*0=00*/  0,-1, 1, 2,// 0->0? nop, 1->0? dec, 2->0? inc, 3->0? err
+/*1=01*/  1, 0, 2,-1,// 0->1? inc, 1->1? nop, 2->1? err, 3->1? dec
+/*2=02*/ -1, 2, 0, 1,// 0->2? dec, 1->2? err, 2->2? nop, 3->2? inc
+/*3=03*/  2, 1,-1, 0 // 0->3? err, 1->3? inc, 2->3? dec, 3->3? nop
+      }; 
+//notice how the err 2's are on the diagonal?
+//and the nop 0's are on the other diagonal?
+//and the inc and dec 1's form a sort of circle?
+        
+    public:
+      AnalogEncoder(uint8_t sinPin, uint8_t cosPin, int32_t sCenter = 512, int32_t cCenter = 512) {
+        pin_sin = sinPin;
+        pin_cos = cosPin;
+        sincenter = sCenter;
+        coscenter = cCenter;
+        count = 0;
+        old_state = 0;
+      }
+      
+      // Analog polling requires active updates!
+      void update() {
+        int sin_sign = analogRead(pin_sin) - sincenter;
+        int cos_sign = analogRead(pin_cos) - coscenter;
+        int8_t new_state = (sin_sign > 0) + 2 * (cos_sign > 0);
+  // 0 = 00 = a0 + b0
+  // 1 = 01 = a1 + b0
+  // 2 = 10 = a0 + b2
+  // 3 = 11 = a1 + b2
+  //index the Quadrature Encoder Matrix by old and new state
+  //make the old state the 4th and 5th bits
+        int8_t action = QEM[new_state + 4 * old_state];
+        old_state = new_state;
+        if (action != 2) count += action; 
+      }
+      
+      long read() { 
+        int sin_sign = analogRead(pin_sin) - sincenter;
+        int cos_sign = analogRead(pin_cos) - coscenter;
+        long a = (atan2(sin_sign, cos_sign) / (2 * M_PI)) * 1024 + 512;
+        // Combine the coarse count with the fine sub-step phase
+        return (count * 1024) + a; 
+      }
+      void write(long p) { count = p; }
+    // end of public methods
+  };
+  typedef AnalogEncoder ABC_Encoder;
+  ABC_Encoder* physical_encoders[MAX_DEVICES] = {nullptr};
+#endif
 
 inline void vm_yield() {
   //sleep_us(1); 
@@ -175,6 +245,13 @@ inline void vm_yield() {
     if (allocated_devices[i].type == 'S' && physical_steppers[i] != nullptr) {
       //DEBUG_SERIAL.print(".");
       physical_steppers[i]->run();
+    }
+  }
+#endif
+#if defined(ENCODER_SUPPORT) && defined(USE_ANALOG_ENCODER)
+  for (int i = 1; i < next_device_index; i++) {
+    if (allocated_devices[i].type == 'Q' && physical_encoders[i] != nullptr) {
+      physical_encoders[i]->update(); // Poll the ADCs!
     }
   }
 #endif
@@ -257,6 +334,15 @@ bool matchStream(const char* target_str) {
   return true;
 }
 
+void vm_error(const char* msg) {
+  if (in_repl) {
+    DEBUG_SERIAL.print("\r\n[ERR] ");
+    DEBUG_SERIAL.println(msg);
+    DEBUG_SERIAL.print("> "); // Reprint the prompt
+  }
+  // (Optional) We could also set a reserved register like 'e' to an error code here!
+}
+
 void devWrite(int handle, char c) {
   if (allocated_devices[handle].type == 'T') {
 #ifdef TEST
@@ -328,13 +414,37 @@ long allocateDevice(char dev_type, int arg_start) {
       pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
       analogWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
+    case 'Q': // Analog Quadrature Encoder
+#ifdef ENCODER_SUPPORT
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
+      allocated_devices[next_device_index].pinB = stack[arg_start + 2];
+      allocated_devices[next_device_index].shadow_value = 0;
+      {
+        long s_center = (current_arg_count >= 4) ? stack[arg_start + 3] : 512;
+        long c_center = (current_arg_count >= 5) ? stack[arg_start + 4] : 512;
+
+        if (physical_encoders[next_device_index] != nullptr) {
+          delete physical_encoders[next_device_index];
+        }
+        physical_encoders[next_device_index] = new ABC_Encoder(
+          allocated_devices[next_device_index].pinA, 
+          allocated_devices[next_device_index].pinB,
+          s_center,
+          c_center
+        );
+      }
+#else
+      vm_error("Encoder support disabled in firmware");
+      return 0; // Fail the allocation
+#endif
+      break;
     case 'R': // Servo. Arguments: (Type, Pin, Value) or use R.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       physical_servos[allocated_devices[next_device_index].pinA].attach(allocated_devices[next_device_index].pinA);
       physical_servos[allocated_devices[next_device_index].pinA].write(allocated_devices[next_device_index].shadow_value);
       break;
-    case 'S': //Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
+    case 'S': // Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
       //TODO: check current_arg_count to ensure we have enough parameters.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].pinB = stack[arg_start + 2];
@@ -406,6 +516,110 @@ void executeReturn() {
   }
 }
 
+long readDeviceState(int handle) {
+  char d_type = allocated_devices[handle].type;
+  uint8_t target_pin = allocated_devices[handle].pinA;
+  long result = 0;
+
+  if (d_type == 'I') {
+    result = digitalRead(target_pin);
+  } else if (d_type == 'A') {
+    result = analogRead(target_pin);
+  } else if (d_type == 'R') {
+    result = physical_servos[target_pin].read();
+  } else if (d_type == 'Q') {
+#ifdef ENCODER_SUPPORT
+    result = physical_encoders[handle] ? physical_encoders[handle]->read() : 0;
+#endif
+  } else if (d_type == 'S') {
+#ifdef STEPPER_SUPPORT
+    result = physical_steppers[handle] ? physical_steppers[handle]->currentPosition() : 0;
+#endif
+  } else if (d_type == 'D') {
+    long read_addr = (active_sub_addr != -1) ? active_sub_addr : 132;
+#ifdef TEST
+    result = mock_dxl_ram[handle][read_addr % 256];
+#else
+  #ifdef DYNAMIXEL_SUPPORT
+    result = dxl.readControlTableItem(read_addr, target_pin);
+  #endif
+#endif
+    active_sub_addr = -1; // Consume the address!
+  } else if (d_type == 'i') {
+    long read_addr = (active_sub_addr != -1) ? active_sub_addr : 0; 
+    int bytes_to_read = (num > 0) ? num : 1; 
+    int i2c_addr = allocated_devices[handle].shadow_value;
+    
+    Wire.beginTransmission(i2c_addr);
+    Wire.write(read_addr);
+    Wire.endTransmission(false);
+    Wire.requestFrom(i2c_addr, bytes_to_read);
+    
+    if (bytes_to_read == 1) {
+      result = Wire.available() ? Wire.read() : 0;
+    } else {
+      int start_ptr = code_ptr;
+      for(int i = 0; i < bytes_to_read; i++) {
+        code_ram[code_ptr++] = Wire.available() ? Wire.read() : 0;
+      }
+      src.meta.type = TYPE_CODE;
+      src.meta.value = start_ptr;
+      result = start_ptr; 
+    }
+    active_sub_addr = -1; // Consume the address!
+  } else {
+    result = allocated_devices[handle].shadow_value; 
+  }
+  
+  return result;
+}
+
+void writeDeviceState(int handle, long val) {
+  char d_type = allocated_devices[handle].type;
+  uint8_t target_pin = allocated_devices[handle].pinA;
+
+  // I2C handles its own shadow value (bus address), everything else updates the tracker
+  if (d_type != 'i') {
+    allocated_devices[handle].shadow_value = val; 
+  }
+
+  if (d_type == 'O') {
+    digitalWrite(target_pin, val);
+  } else if (d_type == 'P') {
+    analogWrite(target_pin, val);
+  } else if (d_type == 'R') {
+    physical_servos[target_pin].write(val);
+  } else if (d_type == 'Q') {
+#ifdef ENCODER_SUPPORT
+    if (physical_encoders[handle]) physical_encoders[handle]->write(val);
+#endif
+  } else if (d_type == 'S') {
+#ifdef STEPPER_SUPPORT
+    if (physical_steppers[handle]) physical_steppers[handle]->moveTo(val);
+#endif
+  } else if (d_type == 'D') {
+    long write_addr = (active_sub_addr != -1) ? active_sub_addr : 116; 
+    allocated_devices[handle].shadow_value = val;
+#ifdef TEST
+    mock_dxl_ram[handle][write_addr % 256] = val;
+    if (write_addr == 116) mock_dxl_ram[handle][132] = val; 
+#else
+  #ifdef DYNAMIXEL_SUPPORT
+    dxl.writeControlTableItem(write_addr, target_pin, val);
+  #endif
+#endif
+    active_sub_addr = -1; 
+  } else if (d_type == 'i') {
+    long write_addr = (active_sub_addr != -1) ? active_sub_addr : 0;
+    int i2c_addr = allocated_devices[handle].shadow_value;
+    Wire.beginTransmission(i2c_addr);
+    Wire.write(write_addr);
+    Wire.write(val);
+    Wire.endTransmission();
+    active_sub_addr = -1; 
+  }
+}
+
 void doop() {
   if (op == 0) return; // No operation to perform
   long* target = nullptr;
@@ -416,7 +630,7 @@ void doop() {
   }
 
   switch (op) {
-    case ':':
+case ':':
       if (dst.meta.type == TYPE_PIN) {
         if (pin_type[dst.meta.value] == 'R') {
           if (!physical_servos[dst.meta.value].attached()) {
@@ -441,9 +655,7 @@ void doop() {
           const char* str = &code_ram[src.meta.value];
           while (*str) devWrite(handle, *str++);
         } else {
-          // Standard hardware parameter write (e.g. Servo Angle)
-          allocated_devices[handle].shadow_value = num;
-          // ... [Hardware write logic like analogWrite] ...
+          writeDeviceState(handle, num); 
         }
       } else if (dst.meta.type == TYPE_REG) {
         // SMART WRITE: Check if the variable space already holds an active peripheral handle
@@ -459,46 +671,8 @@ void doop() {
             const char* str = &code_ram[src.meta.value];
             while (*str) devWrite(handle, *str++);
           } else { //src is not DEV or CODE. Must be a device?
-            // Standard hardware parameter write (e.g., Output Pin, Servo Angle)
-            if (d_type != 'i') {
-              allocated_devices[handle].shadow_value = num; // Keep internal tracker aligned
-            }
-            uint8_t target_pin = allocated_devices[handle].pinA;
-            if (d_type == 'O') {
-              digitalWrite(target_pin, num);
-            } else if (d_type == 'P') {
-              analogWrite(target_pin, num);
-            } else if (d_type == 'R') {
-              physical_servos[target_pin].write(num);
-            } else if (d_type == 'S') {
-#ifdef STEPPER_SUPPORT
-              if (physical_steppers[handle]) {
-                physical_steppers[handle]->moveTo(num);
-              }
-#endif
-            } else if (d_type == 'D') {
-              long write_addr = (active_sub_addr != -1) ? active_sub_addr : 116; // Default: Goal Position
-              allocated_devices[handle].shadow_value = num;
-#ifdef TEST
-              mock_dxl_ram[handle][write_addr % 256] = num;
-              // Auto-update present position for instant test feedback
-              if (write_addr == 116) mock_dxl_ram[handle][132] = num; 
-#else
-  #ifdef DYNAMIXEL_SUPPORT
-              dxl.writeControlTableItem(write_addr, target_pin, num);
-  #endif
-#endif
-              active_sub_addr = -1; // Consume the address
-            } else if (d_type == 'i') {
-              long write_addr = (active_sub_addr != -1) ? active_sub_addr : 0;
-              int i2c_addr = allocated_devices[handle].shadow_value;
-              Wire.beginTransmission(i2c_addr);
-              Wire.write(write_addr);
-              Wire.write(num);
-              Wire.endTransmission();
-              active_sub_addr = -1; // Consume the address!
-            }
-          } //end of src is NOT DEV or CODE, device?
+            writeDeviceState(handle, num);
+          } 
         } else { // No device attached.
           if (active_sub_addr != -1) {
             // RAM DEREFERENCE: active_sub_addr holds the base pointer, num holds the offset.
@@ -513,10 +687,10 @@ void doop() {
             *target = num; 
           }
         }
-      } //END OF dest is TYPE_REG
+      }
       break;
 
-case '%': // FORMATTING OPERATOR
+    case '%': // FORMATTING OPERATOR
       {
         int handle = -1;
         if (dst.meta.type == TYPE_DEV) handle = dst.meta.value;
@@ -753,6 +927,10 @@ void processChar(char c) {
   // Stack Operators: Call Start
   if (c == '(') {
     // Resolve standalone calls (e.g. "a()") where the function name was captured as a destination
+    if (sp >= STACK_SIZE - 5) {
+      vm_error("Stack Overflow");
+      return;
+    }
     if (op == 0 && dst.meta.type == TYPE_REG && src.meta.type == 0) {
       src = dst;
       dst.raw = 0;
@@ -788,6 +966,10 @@ void processChar(char c) {
 
   // Stack Operators: Push Arg
   if (c == ',') {
+    if (sp >= STACK_SIZE - 1) {
+      vm_error("Stack Overflow");
+      return;
+    }
     stack[sp++] = num;
     current_arg_count++;
     num = 0; op = 0; src_dst = false;
@@ -797,6 +979,10 @@ void processChar(char c) {
 
   // Stack Operators: Execute Call
   if (c == ')') {
+    if (sp <= 0) {
+      vm_error("Stack Underflow");
+      return;
+    }
     stack[sp++] = num;
     current_arg_count++;
     // Retrieve the function pointer we saved on the stack
@@ -919,65 +1105,8 @@ void processChar(char c) {
       // Live Hardware Resolution
       else if (vars[regIndex].meta.type == TYPE_DEV) {
         int handle = vars[regIndex].meta.value;
-        char d_type = allocated_devices[handle].type;
-        uint8_t target_pin = allocated_devices[handle].pinA;
-
-        if (d_type == 'I') {
-          num = digitalRead(target_pin);
-        } else if (d_type == 'i') {
-          long read_addr = (active_sub_addr != -1) ? active_sub_addr : 0; 
-          int bytes_to_read = (num > 0) ? num : 1; 
-          int i2c_addr = allocated_devices[handle].shadow_value;
-          
-          Wire.beginTransmission(i2c_addr);
-          Wire.write(read_addr);
-          Wire.endTransmission(false);
-          Wire.requestFrom(i2c_addr, bytes_to_read);
-          //DEBUG_SERIAL.printf("[I2C READ] Target: %d, Reg: %ld, Req: %d, Avail: %d\r\n", i2c_addr, read_addr, bytes_to_read, Wire.available());
-          if (bytes_to_read == 1) {
-            num = Wire.available() ? Wire.read() : 0;
-          } else {
-            // Stream directly into volatile RAM
-            int start_ptr = code_ptr;
-            for(int i=0; i<bytes_to_read; i++) {
-              code_ram[code_ptr++] = Wire.available() ? Wire.read() : 0;
-            }
-            // Package the RAM pointer back into num and source
-            src.meta.type = TYPE_CODE;
-            src.meta.value = start_ptr;
-            num = start_ptr; 
-          }
-          active_sub_addr = -1; // Consume the address!
-        } else if (d_type == 'A') {
-          num = analogRead(target_pin);
-        } else if (d_type == 'R') {
-          num = physical_servos[target_pin].read(); 
-        } else if (d_type == 'S') {
-#ifdef STEPPER_SUPPORT
-          if (physical_steppers[handle]) {
-            num = physical_steppers[handle]->currentPosition();
-          } else {
-            num = 0;
-          }
-#else
-          num = allocated_devices[handle].shadow_value; // Fallback for testing
-#endif
-        } else if (d_type == 'D') {
-          long read_addr = (active_sub_addr != -1) ? active_sub_addr : 132; // Default: Present Position
-#ifdef TEST
-          num = mock_dxl_ram[handle][read_addr % 256];
-#else
-  #ifdef DYNAMIXEL_SUPPORT
-          num = dxl.readControlTableItem(read_addr, target_pin);
-  #else
-          num = 0;
-  #endif
-#endif
-          active_sub_addr = -1; // Consume the address!
-        } else {
-          num = allocated_devices[handle].shadow_value; 
-        }
-      } 
+        num = readDeviceState(handle);
+      }
       // Standard Global Variable
       else {
         num = vars[regIndex].meta.value; 

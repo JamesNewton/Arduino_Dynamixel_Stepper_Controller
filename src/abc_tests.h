@@ -15,6 +15,10 @@ void resetTestState(bool wipe_eeprom = true) {
       delete physical_steppers[i];
       physical_steppers[i] = nullptr;
     }
+    if (physical_encoders[i] != nullptr) {
+      delete physical_encoders[i];
+      physical_encoders[i] = nullptr;
+    }
     for (int j = 0; j < DYNAMIXEL_CTRL_TABLE_LENGTH; j++) {
       mock_dxl_ram[i][j] = 0;
     }
