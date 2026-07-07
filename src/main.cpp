@@ -106,8 +106,8 @@ int current_arg_count = 0;  // How many args in the current scope
 int call_depth = 0;         // Are we inside a subroutine?
 int scope_frame_pointer = 0;
 int scope_arg_count = 0;
-
-char code_ram[1024]; // Volatile dictionary for user functions
+#define CODE_SIZE 1024
+char code_ram[CODE_SIZE]; // Volatile dictionary for user functions
 int code_ptr = 0;
 bool quote_pending = false; // For detecting "" escapes
 bool in_string_literal = false;
@@ -127,7 +127,8 @@ long active_sub_addr = -1; // Tracks the @ operator address
 
 // --- EXECUTION & LOOP CONTROL ---
 const char* pc_ptr = nullptr; // Tracks our current position in the bytecode string
-const char* loop_stack[8];    // Supports nested loops up to 8 levels deep
+#define MAX_LOOP_DEPTH 8
+const char* loop_stack[MAX_LOOP_DEPTH];    // Supports nested loops up to 8 levels deep
 int loop_depth = 0;           // Current loop nesting level
 
 // --- COMPLEX DEVICE MANAGEMENT ---
@@ -372,7 +373,10 @@ void devWrite(int handle, char c) {
 }
 
 long allocateDevice(char dev_type, int arg_start) {
-  if (next_device_index >= MAX_DEVICES) return 0;
+  if (next_device_index >= MAX_DEVICES) {
+    vm_error("Max Devices");
+    return 0;
+  }
   
   allocated_devices[next_device_index].type = dev_type;
   switch (dev_type) {
@@ -559,6 +563,10 @@ long readDeviceState(int handle) {
       result = Wire.available() ? Wire.read() : 0;
     } else {
       int start_ptr = code_ptr;
+      if (code_ptr + bytes_to_read >= CODE_SIZE) {
+        vm_error("Code RAM Overflow");
+        bytes_to_read = CODE_SIZE - code_ptr - 1; // Prevent overflow
+      }
       for(int i = 0; i < bytes_to_read; i++) {
         code_ram[code_ptr++] = Wire.available() ? Wire.read() : 0;
       }
@@ -871,6 +879,7 @@ void processChar(char c) {
   // Double Quote String Parsing & Escaping
   if (in_string_literal && c == '"') {
     if (quote_pending) {
+      if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
       code_ram[code_ptr++] = '"'; // Escaped quote
       quote_pending = false;
     } else {
@@ -879,6 +888,7 @@ void processChar(char c) {
     return;
   } else if (in_string_literal) {
     if (quote_pending) {
+      if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
       // It was a real ending quote. Terminate and exit string mode.
       in_string_literal = false;
       quote_pending = false;
@@ -890,6 +900,7 @@ void processChar(char c) {
       num = 0;
       // Do NOT return! Let the current character 'c' be processed normally (e.g., \n)
     } else {
+      if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
       code_ram[code_ptr++] = c; // Record normal character
       return;
     }
@@ -902,9 +913,11 @@ void processChar(char c) {
 
   // Loop Operators
   if (c == '[') {
-    if (loop_depth < 8) {
-      loop_stack[loop_depth++] = pc_ptr; // Save the address of the '[' character
+    if (loop_depth >= MAX_LOOP_DEPTH) {
+      vm_error("Loop Overflow");
+      return;
     }
+    loop_stack[loop_depth++] = pc_ptr; // Save the address of the '[' character
     return;
   }
 
@@ -914,6 +927,8 @@ void processChar(char c) {
       if (loop_depth > 0) {
         // Jump back! (The evaluateABC loop will increment this by 1, putting us right after '[')
         pc_ptr = loop_stack[loop_depth - 1]; 
+      } else {
+        vm_error("Loop Underflow");
       }
     } else {
       if (loop_depth > 0) {
@@ -1130,6 +1145,7 @@ void processChar(char c) {
 
   // Destination Pin Assignment / Read Shadow Modifier ('P' or 'R')
   if (c == 'P' || c == 'R') {
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
     if (!src_dst) { 
       dst.meta.type = TYPE_PIN;
       dst.meta.value = num;
@@ -1146,6 +1162,7 @@ void processChar(char c) {
 
   // Immediate Hardware Output Commands (H, L)
   if (c == 'H' || c == 'L') {
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
     pin_shadow[num] = (c == 'H') ? 1 : 0; 
     pin_type[num] = 'O';
     pinMode(num, OUTPUT);
@@ -1156,6 +1173,7 @@ void processChar(char c) {
 
   // Active Read Modifiers (I, U, A) - Read hardware, retain value in accumulator for assignment
   if (c == 'I') { // Digital Input
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
     pin_type[num] = 'I';
     pinMode(num, INPUT);
     num = digitalRead(num); 
@@ -1163,6 +1181,7 @@ void processChar(char c) {
   }
 
   if (c == 'U') { // Input Pull-Up
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
     pin_type[num] = 'u';
     pinMode(num, INPUT_PULLUP);
     num = digitalRead(num); 
@@ -1170,6 +1189,7 @@ void processChar(char c) {
   }
 
   if (c == 'A') { // Analog Input 
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
     pin_type[num] = 'A';
     pinMode(num, INPUT);
     num = analogRead(num); 
@@ -1267,7 +1287,7 @@ void setup() {
     DEBUG_SERIAL.println("Executing Boot Script from Hardware EEPROM...");
     int addr = 0;
     char c = EEPROM.read(addr);
-    while (c != '\0' && c != 255 && addr < 1023) {
+    while (c != '\0' && c != 255 && addr < CODE_SIZE - 1) {
       code_ram[addr++] = c;
       c = EEPROM.read(addr);
     }
