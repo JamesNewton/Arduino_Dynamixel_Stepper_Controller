@@ -13,13 +13,13 @@
 //Arduino at 115200, then you need to re-program the Dynamixel to be at 115200. Of course, if you don't use
 //the Dynamixels, you can set this to whatever you like. 
 
-#define DYNAMIXEL_SUPPORT
+//#define DYNAMIXEL_SUPPORT
 //Note: If enabled, the Dynamixel Arduino shield is required and the standard Arduino UNO serial port is NOT functional! 
 //You must install the USB to Serial interface on the Dynamixel Shield and use that for communication. RTFM
 
-#define STEPPER_SUPPORT
+//#define STEPPER_SUPPORT
 
-#define ENCODER_SUPPORT
+//#define ENCODER_SUPPORT
 //#define USE_ANALOG_ENCODER // Comment this out to fall back to standard digital Encoder.h
 
 //#define EOT
@@ -159,8 +159,10 @@ bool in_repl = false;
 char mock_out_buffer[256];
 int mock_out_ptr = 0;
 char mock_eeprom[1024]; // Simulates Arduino EEPROM / Flash
+#ifdef DYNAMIXEL_SUPPORT
 long mock_dxl_ram[MAX_DEVICES][DYNAMIXEL_CTRL_TABLE_LENGTH]; 
 // Simulates control table
+#endif
 #endif
 int eeprom_ptr = 0;
 Servo physical_servos[NUM_DIGITAL_PINS]; 
@@ -373,11 +375,7 @@ void devWrite(int handle, char c) {
 }
 
 long allocateDevice(char dev_type, int arg_start) {
-  if (next_device_index >= MAX_DEVICES) {
-    vm_error("Max Devices");
-    return 0;
-  }
-  
+  if (next_device_index >= MAX_DEVICES) { vm_error("Max Devices"); return 0;}
   allocated_devices[next_device_index].type = dev_type;
   switch (dev_type) {
     case 'A': //Analog Input. Arguments: (Type, Pin) or use A.
@@ -449,11 +447,11 @@ long allocateDevice(char dev_type, int arg_start) {
       physical_servos[allocated_devices[next_device_index].pinA].write(allocated_devices[next_device_index].shadow_value);
       break;
     case 'S': // Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
+#ifdef STEPPER_SUPPORT
       //TODO: check current_arg_count to ensure we have enough parameters.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].pinB = stack[arg_start + 2];
       allocated_devices[next_device_index].shadow_value = 0; // Tracks target
-#ifdef STEPPER_SUPPORT
       // AccelStepper::DRIVER (1) indicates a dedicated Step/Dir driver
       if (physical_steppers[next_device_index] != nullptr) {
         delete physical_steppers[next_device_index];
@@ -465,12 +463,15 @@ long allocateDevice(char dev_type, int arg_start) {
         );
       physical_steppers[next_device_index]->setMaxSpeed(stack[arg_start + 3]);
       physical_steppers[next_device_index]->setAcceleration(stack[arg_start + 4]);
+#else
+      vm_error("Stepper support disabled in firmware");
+      return 0;
 #endif
       break;
     case 'D': //Dynamixel Servo. Arguments: (Type, ServoID, Baudrate)
+#ifdef DYNAMIXEL_SUPPORT
       allocated_devices[next_device_index].pinA = stack[arg_start + 1]; // Servo ID
       allocated_devices[next_device_index].shadow_value = 0; 
-#ifdef DYNAMIXEL_SUPPORT
       dxl.begin(stack[arg_start + 2]); // Baudrate
       dxl.setPortProtocolVersion(2.0);
       dxl.ping(allocated_devices[next_device_index].pinA);
@@ -479,6 +480,9 @@ long allocateDevice(char dev_type, int arg_start) {
       dxl.torqueOff(allocated_devices[next_device_index].pinA);
       dxl.setOperatingMode(allocated_devices[next_device_index].pinA, OP_POSITION);
       dxl.torqueOn(allocated_devices[next_device_index].pinA);
+#else
+      vm_error("Dynamixel support disabled in firmware");
+      return 0;
 #endif
       break;
     case 'T': 
@@ -540,13 +544,13 @@ long readDeviceState(int handle) {
     result = physical_steppers[handle] ? physical_steppers[handle]->currentPosition() : 0;
 #endif
   } else if (d_type == 'D') {
+#ifdef DYNAMIXEL_SUPPORT
     long read_addr = (active_sub_addr != -1) ? active_sub_addr : 132;
 #ifdef TEST
     result = mock_dxl_ram[handle][read_addr % 256];
 #else
-  #ifdef DYNAMIXEL_SUPPORT
     result = dxl.readControlTableItem(read_addr, target_pin);
-  #endif
+#endif
 #endif
     active_sub_addr = -1; // Consume the address!
   } else if (d_type == 'i') {
@@ -606,15 +610,15 @@ void writeDeviceState(int handle, long val) {
     if (physical_steppers[handle]) physical_steppers[handle]->moveTo(val);
 #endif
   } else if (d_type == 'D') {
+#ifdef DYNAMIXEL_SUPPORT
     long write_addr = (active_sub_addr != -1) ? active_sub_addr : 116; 
     allocated_devices[handle].shadow_value = val;
 #ifdef TEST
     mock_dxl_ram[handle][write_addr % 256] = val;
     if (write_addr == 116) mock_dxl_ram[handle][132] = val; 
 #else
-  #ifdef DYNAMIXEL_SUPPORT
     dxl.writeControlTableItem(write_addr, target_pin, val);
-  #endif
+#endif
 #endif
     active_sub_addr = -1; 
   } else if (d_type == 'i') {
@@ -1162,7 +1166,7 @@ void processChar(char c) {
 
   // Immediate Hardware Output Commands (H, L)
   if (c == 'H' || c == 'L') {
-    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");num = 0;return;}
     pin_shadow[num] = (c == 'H') ? 1 : 0; 
     pin_type[num] = 'O';
     pinMode(num, OUTPUT);
@@ -1173,7 +1177,7 @@ void processChar(char c) {
 
   // Active Read Modifiers (I, U, A) - Read hardware, retain value in accumulator for assignment
   if (c == 'I') { // Digital Input
-    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");num = 0;return;}
     pin_type[num] = 'I';
     pinMode(num, INPUT);
     num = digitalRead(num); 
@@ -1181,7 +1185,7 @@ void processChar(char c) {
   }
 
   if (c == 'U') { // Input Pull-Up
-    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");num = 0;return;}
     pin_type[num] = 'u';
     pinMode(num, INPUT_PULLUP);
     num = digitalRead(num); 
@@ -1189,7 +1193,7 @@ void processChar(char c) {
   }
 
   if (c == 'A') { // Analog Input 
-    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");return;}
+    if (num > NUM_DIGITAL_PINS) {vm_error("Pin Overflow");num = 0;return;}
     pin_type[num] = 'A';
     pinMode(num, INPUT);
     num = analogRead(num); 

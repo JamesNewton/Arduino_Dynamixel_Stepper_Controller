@@ -471,8 +471,9 @@ void runAllTests() {
   // 3. Wait 50ms (motor should be accelerating, >0 but <100). Save to 'a'.
   // 4. Wait 250ms (motor should easily reach 100 by now). Save to 'b'.
   // 5. If all kinematics checks pass, set c=1.
+  #ifdef STEPPER_SUPPORT
   runTest(
-    "Stepper Motion & Heartbeat", 
+    "Stepper", 
     "m:D('S', 3, 4, 1000, 5000)\n"
     "m:100\n"
     "50000 W\n"
@@ -482,10 +483,14 @@ void runAllTests() {
     "c:0\n"
     "a>0? a<100? b=100? c:1\n"
     ,'c', 1);
+  #else
+  DEBUG_SERIAL.println("[SKIP] Stepper (no STEPPER_SUPPORT)");
+  #endif // STEPPER_SUPPORT
 
   // TEST 37: Dynamixel Default Behaviors
   // Allocate to 'd'. Writing 500 implicitly hits address 116. 
   // Reading implicitly checks address 132 (which our mock auto-updates).
+#ifdef DYNAMIXEL_SUPPORT
   runTest("Dynamixel Default Position Read/Write", 
           "d:D('D', 1, 115200)\n"
           "d:500\n"
@@ -497,6 +502,15 @@ void runAllTests() {
           "d:D('D', 1, 115200)\n"
           "65@d : 1\n"
           "b : 65@d\n", 'b', 1);
+#else
+  DEBUG_SERIAL.println("[SKIP] Dynamixel (no DYNAMIXEL_SUPPORT)");
+#endif // DYNAMIXEL_SUPPORT
+
+#ifdef ENCODER_SUPPORT
+  DEBUG_SERIAL.println("[SKIP] Encoder (no test available)");
+#else
+  DEBUG_SERIAL.println("[SKIP] Encoder (no ENCODER_SUPPORT)");
+#endif
 
   // TEST 39: I2C Multi-Byte Read & RAM Dereferencing
   #if defined(ARDUINO_ARCH_RP2040)
