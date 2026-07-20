@@ -17,7 +17,7 @@
 //Note: If enabled, the Dynamixel Arduino shield is required and the standard Arduino UNO serial port is NOT functional! 
 //You must install the USB to Serial interface on the Dynamixel Shield and use that for communication. RTFM
 
-//#define STEPPER_SUPPORT
+#define STEPPER_SUPPORT
 
 //#define ENCODER_SUPPORT
 //#define USE_ANALOG_ENCODER // Comment this out to fall back to standard digital Encoder.h
@@ -240,6 +240,17 @@ AccelStepper* physical_steppers[MAX_DEVICES] = {nullptr};
   typedef AnalogEncoder ABC_Encoder;
   ABC_Encoder* physical_encoders[MAX_DEVICES] = {nullptr};
 #endif
+
+#include <stdarg.h>
+
+void debugPrintf(const char *fmt, ...) {
+  char buf[128]; // Adjust size if you have incredibly long lines
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  DEBUG_SERIAL.print(buf);
+}
 
 inline void vm_yield() {
   //sleep_us(1); 
@@ -513,7 +524,7 @@ void executeReturn() {
   num = ret_val; 
   src.raw = 0;   
   call_depth--;
-  //DEBUG_SERIAL.printf("[RETURN] ret_val=%ld. returning to caller depth=%d\r\n", ret_val, call_depth);
+  //debugPrintf("[RETURN] ret_val=%ld. returning to caller depth=%d\r\n", ret_val, call_depth);
   // Restore lexical scope to the caller
   if (call_depth > 0) {
     scope_frame_pointer = frame_pointer;
@@ -689,7 +700,7 @@ case ':':
           if (active_sub_addr != -1) {
             // RAM DEREFERENCE: active_sub_addr holds the base pointer, num holds the offset.
             num = code_ram[active_sub_addr + num];
-            //DEBUG_SERIAL.printf("[RAM DEREF] BasePtr: %ld, Offset: %ld, Got: %d\r\n", active_sub_addr, num, code_ram[active_sub_addr + num]);
+            //debugPrintf("[RAM DEREF] BasePtr: %ld, Offset: %ld, Got: %d\r\n", active_sub_addr, num, code_ram[active_sub_addr + num]);
             active_sub_addr = -1;
           }
           if (src.meta.type == TYPE_DEV || src.meta.type == TYPE_CODE) {
@@ -975,7 +986,7 @@ void processChar(char c) {
     stack[sp++] = state_flags;
     stack[sp++] = frame_pointer;      // Save caller's frame
     stack[sp++] = current_arg_count;  // Save caller's arg count
-    //DEBUG_SERIAL.printf("[CALL START] Pushed frame=%d, arg_count=%d. New sp=%d\r\n", frame_pointer, current_arg_count, sp);
+    //debugPrintf("[CALL START] Pushed frame=%d, arg_count=%d. New sp=%d\r\n", frame_pointer, current_arg_count, sp);
     frame_pointer = sp; // New frame starts here
     src_dst = true;     // Ensure arguments are evaluated as sources
     current_arg_count = 0;
@@ -1007,7 +1018,7 @@ void processChar(char c) {
     // Retrieve the function pointer we saved on the stack
     ABCState func_src;
     func_src.raw = stack[frame_pointer - 4];
-    //DEBUG_SERIAL.printf("[CALL EXEC] Passed num=%ld. Jmp to ptr=%d. scope_arg_count=%d\r\n", num, func_src.meta.value, current_arg_count);
+    //debugPrintf("[CALL EXEC] Passed num=%ld. Jmp to ptr=%d. scope_arg_count=%d\r\n", num, func_src.meta.value, current_arg_count);
     // COMPLEX DEVICE SYSTEM CALL MANAGER ('D')
     if (func_src.meta.type == TYPE_FUNC && func_src.meta.value == 'D') {
      // Find where our arguments begin on the stack frame

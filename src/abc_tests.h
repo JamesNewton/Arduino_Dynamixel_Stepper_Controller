@@ -9,21 +9,29 @@ int testCount = 0;
 int passCount = 0;
 
 void resetTestState(bool wipe_eeprom = true) {
+for (int i = 0; i < MAX_DEVICES; i++) {
+    allocated_devices[i].type = 0;
+    
 #ifdef STEPPER_SUPPORT
-  for (int i = 1; i < MAX_DEVICES; i++) {
     if (physical_steppers[i] != nullptr) {
       delete physical_steppers[i];
       physical_steppers[i] = nullptr;
     }
+#endif
+
+#ifdef ENCODER_SUPPORT
     if (physical_encoders[i] != nullptr) {
       delete physical_encoders[i];
       physical_encoders[i] = nullptr;
     }
+#endif
+
+#ifdef DYNAMIXEL_SUPPORT
     for (int j = 0; j < DYNAMIXEL_CTRL_TABLE_LENGTH; j++) {
       mock_dxl_ram[i][j] = 0;
     }
-  }
 #endif
+  }
   next_device_index = 1;
   for(int i=0; i<26; i++) {
     vars[i].raw = 0;
@@ -85,12 +93,12 @@ void runMatchTest(const char* testName, const char* target, bool expectedResult,
   bool result = matchStream(target);
   
   if (result == expectedResult && rx_tail == expectedTail) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    debugPrintf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
-    DEBUG_SERIAL.printf("       Expected Result: %d, Got: %d\r\n", expectedResult, result);
-    DEBUG_SERIAL.printf("       Expected Tail: %d, Got: %d\r\n", expectedTail, rx_tail);
+    debugPrintf("[FAIL] %s\r\n", testName);
+    debugPrintf("       Expected Result: %d, Got: %d\r\n", expectedResult, result);
+    debugPrintf("       Expected Tail: %d, Got: %d\r\n", expectedTail, rx_tail);
   }
 }
 
@@ -117,12 +125,12 @@ void runTest(const char* testName, const char* code, char checkReg, long expecte
 
   long actualValue = vars[checkReg - 'a'].meta.value;
   if (actualValue == expectedValue) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    debugPrintf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    debugPrintf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
+    debugPrintf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
   }
 }
 
@@ -132,12 +140,12 @@ void runAnalogTest(const char* testName, const char* code, char checkReg, long e
   evaluateABC(code);
   long actualValue = vars[checkReg - 'a'].meta.value;
   if (abs(actualValue - expectedValue) <= tolerance) {
-    DEBUG_SERIAL.printf("[PASS] %s (%ld, %ld±%ld)\r\n", testName, actualValue, expectedValue, tolerance);
+    debugPrintf("[PASS] %s (%ld, %ld±%ld)\r\n", testName, actualValue, expectedValue, tolerance);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    debugPrintf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       '%c' should be %ld (±%ld), got %ld\r\n", checkReg, expectedValue, tolerance, actualValue);
+    debugPrintf("       '%c' should be %ld (±%ld), got %ld\r\n", checkReg, expectedValue, tolerance, actualValue);
   }
 }
 
@@ -149,10 +157,10 @@ void runHardwareTest(const char* testName, const char* code, int checkPin, long 
   long actualValue = isServo ? physical_servos[checkPin].read() : pin_shadow[checkPin];
   
   if (actualValue == expectedValue) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    debugPrintf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n       Code: %s\r       Expected Pin %d to be %ld, but got %ld\r\n", testName, code, checkPin, expectedValue, actualValue);
+    debugPrintf("[FAIL] %s\r\n       Code: %s\r       Expected Pin %d to be %ld, but got %ld\r\n", testName, code, checkPin, expectedValue, actualValue);
   }
 }
 
@@ -162,12 +170,12 @@ void runStringTest(const char* testName, const char* code, const char* expectedS
   evaluateABC(code);
   
   if (strcmp(mock_out_buffer, expectedString) == 0) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    debugPrintf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    debugPrintf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       Expected output: '%s', but got '%s'\r\n", expectedString, mock_out_buffer);
+    debugPrintf("       Expected output: '%s', but got '%s'\r\n", expectedString, mock_out_buffer);
   }
 }
 
@@ -177,12 +185,12 @@ void runFlashTest(const char* testName, const char* code, const char* expectedSt
   evaluateABC(code);
   
   if (strcmp(mock_eeprom, expectedString) == 0) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    debugPrintf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    debugPrintf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       Expected EEPROM: '%s', but got '%s'\r\n", expectedString, mock_eeprom);
+    debugPrintf("       Expected EEPROM: '%s', but got '%s'\r\n", expectedString, mock_eeprom);
   }
 }
 
@@ -204,11 +212,11 @@ void runBootTest(const char* testName, const char* bootScript, const char* userC
   
   long actualValue = vars[checkReg - 'a'].meta.value;
   if (actualValue == expectedValue) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    debugPrintf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
-    DEBUG_SERIAL.printf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
+    debugPrintf("[FAIL] %s\r\n", testName);
+    debugPrintf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
   }
 }
 
@@ -231,12 +239,12 @@ void runStreamCodeTest(const char* testName, const char* streamInput, const char
   
   long actualValue = vars[checkReg - 'a'].meta.value;
   if (actualValue == expectedValue) {
-    DEBUG_SERIAL.printf("[PASS] %s\r\n", testName);
+    debugPrintf("[PASS] %s\r\n", testName);
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] %s\r\n", testName);
+    debugPrintf("[FAIL] %s\r\n", testName);
     printCodeIndented(code);
-    DEBUG_SERIAL.printf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
+    debugPrintf("       '%c' should be %ld, got %ld\r\n", checkReg, expectedValue, actualValue);
   }
 }
 
@@ -373,10 +381,10 @@ void runAllTests() {
   // Try to copy 'a' to 'c'. If shadowing works, 'c' becomes 77, not 0
   evaluateABC("c:a\n"); 
   if (vars['c'-'a'].meta.value == 77) {
-    DEBUG_SERIAL.printf("[PASS] Parameter Shadowing\r\n");
+    debugPrintf("[PASS] Parameter Shadowing\r\n");
     passCount++;
   } else {
-    DEBUG_SERIAL.printf("[FAIL] Parameter Shadowing\r\n");
+    debugPrintf("[FAIL] Parameter Shadowing\r\n");
   }
   call_depth = 0; // reset
 
@@ -566,7 +574,7 @@ void runAllTests() {
     "0.05"
   );
 
-  DEBUG_SERIAL.printf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
+  debugPrintf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);
 }
 
