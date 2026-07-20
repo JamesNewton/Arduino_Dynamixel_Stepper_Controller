@@ -1,6 +1,6 @@
 # ABC Device Peripheral
 
-This is just an Arduino script, targeting the pi pico, to set pins high, low, input, pull up, or analog/rc servo, and control steppers, dynamixels, and more. And a bit more.
+This branch ([source](https://github.com/JamesNewton/Arduino_Dynamixel_Stepper_Controller/tree/abc-pio)) is just an Arduino script, targeting the pi pico, to set pins high, low, input, pull up, or analog/rc servo, and control steppers, dynamixels, and more. And a bit more.
 
 - Not something you have to re-program to support different devices; Everything is already there. It's a REPL; a live environment. You type instructions, the hardware / devices responds. However, it can use the EEPROM to remember and re-play instructions, which are pretty capable. 
 
@@ -17,7 +17,7 @@ Note: If SERVO_SUPPORT is enabled and the Dynamixel Shield is installed, then it
 
 ## DEMO:
 
-Get a pi pico, hold down the button, plug in the USB, release the button, drag and drop the .uf2 from the release on to it. 
+Get a pi pico, hold down the button, plug in the USB, release the button, drag and drop the .uf2 on to it. 
 (or use whatever Arduino you like if you re-compile it... might work with an Uno if you disable the options)
 
 **GPIO:** Now open a terminal and type. Want the LED on? type: `13H` or whatever pin the LED is on followed by 'H' for "high". Turn it off with `13L`. 
