@@ -1,5 +1,20 @@
 # TODOs
 
+After `?` fails, keep skipping indented lines?
+
+After `?` succeeds, and `!` is being skipped, keep skipping indented lines?
+
+J	(Jump) move NUM lines TODO?
+
+When the pin is an input, H and L set or clear TRUE based on the pins value.
+
+SPI `D('s', MISOpin, MOSIpin, SCKpin)` 
+
+UART / Serial  `D('U', TXpin, RXpin, baud)`
+
+
+# TO DONEs
+
 ## Incremental Blocking String Matcher
 
 Concept: When evaluating incoming text (e.g., t="hello"?), the VM must not accidentally destroy characters if a match fails, so subsequent lines (e.g., t="hi"?) can evaluate them.

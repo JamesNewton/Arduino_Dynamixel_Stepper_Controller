@@ -1,16 +1,19 @@
 # ABC Device Peripheral
 
-This branch ([source](https://github.com/JamesNewton/Arduino_Dynamixel_Stepper_Controller/tree/abc-pio)) is just an Arduino script, targeting the pi pico, to set pins high, low, input, pull up, or analog/rc servo, and control steppers, dynamixels, and more. And a bit more.
+This branch ([source](https://github.com/JamesNewton/Arduino_Dynamixel_Stepper_Controller/tree/abc-pio)) is an Arduino script, targeting the pi pico, to set pins high, low, input, pull up, or PWM, and drive devices like rc servos, and control steppers, dynamixels, and more. 
 
-- Not something you have to re-program to support different devices; Everything is already there. It's a REPL; a live environment. You type instructions, the hardware / devices responds. However, it can use the EEPROM to remember and re-play instructions, which are pretty capable. 
+And a bit more than that: It's a byte code interpreted language that looks a bit like a high level 
+language. e.g. `y:m*x + b`
 
-- Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a Pi or other high level robot controller. 
+- You don't have to re-program your bare metal IO processor to support different devices for your OS based device; Everything is already there. It's a REPL; a live environment. You type instructions, the hardware / devices responds. Although... it *can* use the EEPROM to remember and re-play instructions, which are pretty capable. 
+
+- Not a replacement for Firmata as this is intended to be used by a human directly via serial monitor or terminal, in addition to being useful from a PC, Pi, or other high level robot controller. 
 
 **LANGUAGE**: This branch is the language version of the controller. The language goals are:
 - Get close to a high level language, w/ understandable syntax, without including a compiler, or a complex interpreter.
-- Use the minimum resources possible to interpret the bytecodes, focus on io with the devices. 
+- Use the minimum resources possible to interpret the bytecodes, and focus on io with the devices. 
 - Follow the pattern: *Destination* [*Operation* *Source* ...], e.g. <BR>`a:b+c*d` (no operator presidence. a is (b+c)\*d, not b+(c\*d))
-- The regular keywords and variables are single characters, making use of punctuation. e.g. `if` is `?`, `return` is `.`
+- Keywords and variables are single characters, making use of punctuation. e.g. `if` is `?`, `return` is `.`. The `r` register holds the radix for numbers. `t` holds the terminal device.
 
 
 Note: If SERVO_SUPPORT is enabled and the Dynamixel Shield is installed, then it does NOT communicate via the Arduino USB adapter during normal operation, it uses an external USB / TTL serial adapter instead because the Dynamixel is on the main Arduino serial port. If you don't need the servos, it will (probably) work with just the standard Arduino serial interface.
@@ -26,119 +29,103 @@ Read pin 3 with `t:3I` which sets pin 13 as an input, reads it, and sends the re
 ```
 6A=100?t:"YES"!t:"NO"
 ```
-A for analog input, `?` is the conditional bang `!` is else. 
+A for analog input, `?` is the conditional bang `!` is else. If pin 6 ADC returns 100, it prints "YES" otherwise, it prints "NO".
 
-`4 P 128` does an "analog" (actually PWM) out at 128 out max PWM.
+`4 P 128` does an "analog" (actually PWM) out at 128 / 255 aka 50% PWM.
 
 **RC SERVOS**: But you can also talk to more complex hardware. e.g. `2R:90` sets up a servo output on pin 2 and runs it to 90 degrees. But then it will jerk a bit if you re-issue that command with `2R:91`. Better to setup a device: 
 ```
 a:D('R',2)
+```
+Or better yet, you can use device names
+```
+a:D('SERVO',2)
 ```
 and then 
 ```
 a:90
 a:91
 ```
-doesn't jerk. 
+moves and doesn't jerk. 
 
 **REGISTERS**: The 'a' there is a register, which can hold values, references, or devices. Lower case letters are registers, but some have special functions so be careful: 
 - 't' is the terminal, input or output.
 - 's' is the stack pointer. Yes, you can crash it.
-- 'r' sets the radix (default 10) and a-f or higher can turn into digits if r:16 for example then you are putting in hex values and f is 15, not the f register.
+- 'r' sets the radix (default 10) and a-f or higher can turn into digits if r:16 for example then you are putting in hex values and f is 15, not the f register; a thu f become digits not registers.
 - 'q' sets the input buffer index for terminal input and matches (more on that later)
 - 'p' is the program counter, you can jump and crash. 
 
 g-o are (currently) safe, and u-z. 
 
 **DEVICE DRIVERS**: Complex devices are setup via 'D'rivers which take in a type letter, and other parameters, usually the pin or pins, and whatever else is needed. For example, if you want to run run stepper motors
-`m:D('S', 3, 4, 1000, 5000)`
+`m:D('STEPPER', 3, 4, 1000, 5000)`
 pin 3 is step, 4 direction, and a max velocity of 1000 steps per second, 5000 acceleration. `m:500` to move 500 steps.
 
 Support is coming for I2C devices, encoders, and so on. 
 
 ## Commands
-```
-0-9 (and lowercase a up when radix > 10) these accumulate base 'r' digits into NUM 
-    All numbers are 32 bit ints, no floats. See '%' below for fixed place.
-a-z Variables/Registers (SRC or DST). Some registers have special meanings:
-    p Program Counter aka PC.
-    q Queue length (RX ring buffer). Read/Write to manage incoming stream.
-    r Radix (Default 10). >10 treat 'a' on as digits. e.g. a-f for hex if r=16.
-    s Stack Pointer aka SP.
-    t Terminal Device (Default serial output/input).
-:	Copy / assignment. a:5 sets register 0 to 5. a:b copies the value of b to a
-@	index. Address for a device (dynamixel, I2C, ...) or an offset for an array.
-'   (Single Quote) ASCII literal. Numeric decimal value of a char ('A' is 65).
-"	(Quote) Text. Each following char is copied to the DST until the ending quote.
-	If the DST is a variable, the chars are copied into memory and the var is
-	set to the starting address of the string in memory.
-	If the operation was already " when a new starting " is seen, put a " into 
-    the dest then enter text mode. "Push ""START""" prints Push "START"
-    Can also be used to match incomming text. e.g. t="HELLO"?t:"HI"
-%	Format. Converts the value of source to digits (radix r) and copies it to DST
-    Uses a previous num as length and following num as precision. 
-    e.g. a:250;t:8%2a -> ____2.50
-    Also dumps FLASH to out. e.g. a:"HELLO"; t:%a; will print HELLO
-+	set operation to add. a+b adds b to a. a:b+5 sets a to b then adds 5. 
-	If there is no SRC, the NUM is used as the SRC. a+1 increments a.
--	set operation to subtract. a:b+3 a becomes b plus 3. a-1 decrements a.
-&	set operation to bitwise AND. a-&b ANDs a with NOT b. 
-|	set operation to bitwise OR
-=	set compare type to equal
-<	set compare type to less than
->	set compare type to greater than
-{	Less than or equal (ASCII value of '<' plus '=' less 63)
-}	Greater than or equal (ASCII value of '>' plus '=' less 63)
-~	Not. Toggle true/false flag. Use with greater less and equal. 
-    e.g. a<b~ will set the true flag if a is greater than or equal to b.
-    >~ is less than or equal too. <~ is greater than or equal too. =~ is not equal
-	perhaps change to ` (single back tick) (ASCII value of '!' plus '=' less 63)
-?	if. Skip to the next line or ! if the comparison fails (not TRUE) 
-    TODO: keep skipping indented lines.
-!	else. Skip to the next line if the comparison succeeded 
-    TODO: keep skipping indented lines. 
-(	parms. Prep for a function call by pushing state.
-,   push NUM as an argument to the stack and increment SP.  
-)	call. Push final argument, push PC, set PC to DST, calling the function
-[	Start loop
-]	End loop if true flag is not set.
-.	return. Cleanup stack, restore PC.
-;   Line end. Same as \n
-A	set Port pin in SRC to read analog values in e.g. a:2A.
-D   Device. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details.
-J	(Jump) move NUM lines TODO?
-I	(In) set the Port or Port pin in SRC to an Input. E.g. a:7I reads pin 7 to a
-H	(High) set the Pin in DST to high. e.g. 1H sets pin 1 high.
-L	(Low) set the Pin in DST to low.
-	When the pin is an input, H and L set or clear TRUE based on the pins value.
-P	(PWM) set Pin in DST to output PWM in SRC. e.g. 2P100
-R	(RC Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. 1R90
-T	(Terminal) set SRC or DST to the Serial port. 0x89
-U	(Up) set Pin in DST to inputs with internal pull-up
-W	Wait. Delay for NUM microseconds. Clears DST. e.g. 100W 1H L H L
+
+| Command | Description |
+| :---: | :--- |
+| `0`-`9` | (and lowercase `a` up when radix > 10) these accumulate base 'r' digits into NUM. All numbers are 32 bit ints, no floats. See `%` below for fixed place. |
+| `a`-`z` | Variables/Registers (SRC or DST). Some registers have special meanings:<br>• `p` Program Counter aka PC.<br>• `q` Queue length (RX ring buffer). Read/Write to manage incoming stream.<br>• `r` Radix (Default 10). >10 treat 'a' on as digits. e.g. a-f for hex if r=16.<br>• `s` Stack Pointer aka SP.<br>• `t` Terminal Device (Default serial output/input). |
+| `:` | Copy / assignment. `a:5` sets register 0 to 5. `a:b` copies the value of b to a. |
+| `@` | index. Address for a device (dynamixel, I2C, ...) or an offset for an array. |
+| `'` | (Single Quote) ASCII literal or hash. Numeric decimal value of a char (`'A'` is 65) or the hash of a string (`'PWM'` is 0x151FA2). |
+| `"` | (Quote) Text. Each following char is copied to the DST until the ending quote. If the DST is a variable, the chars are copied into memory and the var is set to the starting address of the string in memory. If the operation was already `"` when a new starting `"` is seen, put a `"` into the dest then enter text mode. `Push ""START""` prints `Push "START"`. Can also be used to match incoming text. e.g. `t="HELLO"?t:"HI"`. |
+| `%` | Format. Converts the value of source to digits (radix r) and copies it to DST. Uses a previous num as length and following num as precision. e.g. `a:250;t:8%2a` -> `____2.50`. Also dumps FLASH to out. e.g. `a:"HELLO"; t:%a;` will print `HELLO`. |
+| `+` | set operation to add. `a+b` adds b to a. `a:b+5` sets a to b then adds 5. If there is no SRC, the NUM is used as the SRC. `a+1` increments a. |
+| `-` | set operation to subtract. `a:b-3` a becomes b less 3. `a-1` decrements a. |
+| `&` | set operation to bitwise AND. `a-&b` ANDs a with NOT b. |
+| `\|` | set operation to bitwise OR. |
+| `=` | set compare type to equal. |
+| `<` | set compare type to less than. |
+| `>` | set compare type to greater than. |
+| `{` | Less than or equal (ASCII value of `<` plus `=` less 63). |
+| `}` | Greater than or equal (ASCII value of `>` plus `=` less 63). |
+| `~` | Not. Toggle true/false flag. Use with greater less and equal. e.g. `a<b~` will set the true flag if a is greater than or equal to b. `>~` is less than or equal too. `<~` is greater than or equal too. `=~` is not equal. |
+| `?` | if. Skip to the next line or `!` if the comparison fails (not TRUE). |
+| `!` | else. Skip to the next line if the comparison succeeded. |
+| `(` | parms. Prep for a function call by pushing state. |
+| `,` | push NUM as an argument to the stack and increment SP. |
+| `)` | call. Push final argument, push PC, set PC to DST, calling the function. |
+| `[` | Start loop. |
+| `]` | End loop if true flag is not set. |
+| `.` | return. Cleanup stack, restore PC. |
+| `;` | Line end. Same as `\n`. |
+| `A` | set Port pin in SRC to read analog values in e.g. `a:2A`. |
+| `D` | Device. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details. |
+| `I` | (In) set the Port or Port pin in SRC to an Input. E.g. `a:7I` reads pin 7 to a. |
+| `H` | (High) set the Pin in DST to high. e.g. `1H` sets pin 1 high. |
+| `L` | (Low) set the Pin in DST to low. |
+| `P` | (PWM) set Pin in DST to output PWM in SRC. e.g. `2P100`. |
+| `R` | (RC Servo) set Port pin in DST to drive RC servo to postion in SRC. e.g. `1R90`. |
+| `U` | (Up) set Pin in DST to inputs with internal pull-up. |
+| `W` | Wait. Delay for NUM microseconds. Clears DST. e.g. `100W 1H L H L`. |
+
 
 Unused (for now)
 $	
 ^	power? 
 _	label? sub-element?
-```
-Devices: These are the mnemonic character literals passed to the D (Device) 
-function to allocate and configure hardware peripherals:
 
-Command | Description
---- | ---
-D('A', *pin*) | Analog Input. `i:D('A',2);i>128?"High";`
-D('D', *id*, *baud*) |  Dynamixel Servo. No pin number because there is only one bus. Address the control table with the @ operator. e.g. `65@d:1` to turn on the LED. The default address is Goal Position on write, Current Position on read.
-D('i', *SCLpin*, *SDApin*, *address*)  | I2C Bus. Set address with @. `i:D('i', 5, 4, 104);1@i : 123` Write 123 to register 1 in the I2C device attached to pin 4 and 5 (SDA, SCL) with address 104. `x : 0 @ 2 i` streams 2 bytes into RAM, and `x @ 1` dereferences that memory
-D('I', *pin*, *pull*) | Digital Input use I, or U.
-D('O', *pin*, *value*) | Digital Output or use H, L. 
-D('P', *pin*, *value*) | PWM Output or use P.
-D('Q', *pinA*, *pinB*) |  Quadrature Encoder **TODO**
-D('R', *pin*, *angle*) |  RC Servo or use S.
-D('s', *MISOpin*, *MOSIpin*, *SCKpin*) |  SPI Bus. **TODO**
-D('S', *STEPpin*, *DIRpin*, *velocity*, *accel*)  |  Stepper Motor. Write a goal position. `m:D('S', 3, 4, 1000, 5000);m:100` Run the stepper driver connected to pins 3 and 4 (step and direction) forward 100 steps, at 1K steps per second, with an accelleration of 5K steps per second per second.
-D('U', *TXpin*, *RXpin*, *baud*) |  UART / Serial. **TODO**
-D('F') | Serialize variables, strings, and functions directly into non-volatile memory so they survive a reboot. 
+
+Devices: These are the mnemonic character literals passed to the D (Device) function to allocate and configure hardware peripherals:
+
+| Command | Description |
+| :--- | :--- |
+| `D('A', pin)` | Analog Input. `i:D('A',2);i>128?"High";` |
+| `D('D', id, baud)` | Dynamixel Servo. No pin number because there is only one bus. Address the control table with the `@` operator. e.g. `65@d:1` to turn on the LED. The default address is Goal Position on write, Current Position on read. |
+| `D('i', SCLpin, SDApin, address)` | I2C Bus. Set address with `@`. `i:D('i', 5, 4, 104);1@i : 123` Write 123 to register 1 in the I2C device attached to pin 4 and 5 (SDA, SCL) with address 104. `x : 0 @ 2 i` streams 2 bytes into RAM, and `x @ 1` dereferences that memory. |
+| `D('I', pin, pull)` | Digital Input use `I`, or `U`. |
+| `D('O', pin, value)` | Digital Output or use `H`, `L`. |
+| `D('P', pin, value)` | PWM Output or use `P`. |
+| `D('Q', pinA, pinB)` | Quadrature Encoder |
+| `D('R', pin, angle)` | RC Servo or use `S`. |
+| `D('s', MISOpin, MOSIpin, SCKpin)` | SPI Bus. **TODO** |
+| `D('S', STEPpin, DIRpin, velocity, accel)` | Stepper Motor. Write a goal position. `m:D('S', 3, 4, 1000, 5000);m:100` Run the stepper driver connected to pins 3 and 4 (step and direction) forward 100 steps, at 1K steps per second, with an accelleration of 5K steps per second per second. |
+| `D('U', TXpin, RXpin, baud)` | UART / Serial. **TODO** |
+| `D('F')` | Serialize variables, strings, and functions directly into non-volatile memory so they survive a reboot. |
 
 ## Matching
 In addition to device and digital IO, we can do input stream pattern matching. 

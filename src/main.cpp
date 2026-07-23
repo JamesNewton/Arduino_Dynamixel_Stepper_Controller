@@ -111,7 +111,7 @@ char code_ram[CODE_SIZE]; // Volatile dictionary for user functions
 int code_ptr = 0;
 bool quote_pending = false; // For detecting "" escapes
 bool in_string_literal = false;
-bool in_char_literal = false; // For parsing 'm'
+bool in_hash_literal = false; // For parsing 'hash'
 long num = 0;                 // Numeric accumulator
 int format_width = 0; 
 int format_prec = 0;
@@ -252,6 +252,16 @@ void debugPrintf(const char *fmt, ...) {
   DEBUG_SERIAL.print(buf);
 }
 
+// Base-26 Perfect Hash function (evaluated at compile-time)
+constexpr long hash_id(const char* str) {
+  uint32_t h = 0; // Use unsigned 32-bit for legal memory wrapping
+  for (int i = 0; str[i] != '\0'; i++) {
+    // Multiply by 131 (Prime) to safely scramble, then add raw ASCII
+    h = (h * 131) + str[i]; 
+  }
+  return static_cast<long>(h); // Cast back to signed to match the VM
+}
+
 inline void vm_yield() {
   //sleep_us(1); 
 #ifdef STEPPER_SUPPORT
@@ -385,21 +395,33 @@ void devWrite(int handle, char c) {
   }
 }
 
-long allocateDevice(char dev_type, int arg_start) {
+long allocateDevice(long dev_type_hash, int arg_start) {
   if (next_device_index >= MAX_DEVICES) { vm_error("Max Devices"); return 0;}
-  allocated_devices[next_device_index].type = dev_type;
-  switch (dev_type) {
-    case 'A': //Analog Input. Arguments: (Type, Pin) or use A.
+  
+  // We determine the internal single-character tag to keep the rest of the VM untouched
+  char internal_type = 0;
+
+  switch (dev_type_hash) {
+    case hash_id("A"): //Analog Input. Arguments: (Type, Pin) or use A.
+    case hash_id("ANALOG"):
+      internal_type = 'A';
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       pinMode(allocated_devices[next_device_index].pinA, INPUT);
       break;
-    case 'F': //EEPROM. Arguments: (Type) or use F.
+
+    case hash_id("F"): //EEPROM. Arguments: (Type) or use F.
+    case hash_id("FLASH"):
+      internal_type = 'F';
       eeprom_ptr = 0; 
 #ifdef TEST
       mock_eeprom[0] = '\0';
 #endif
       break;
-    case 'i': //I2C Bus. Arguments: (Type, SclPin, SdaPin)
+
+    case hash_id("i"): //I2C Bus. Arguments: (Type, SclPin, SdaPin)
+    case hash_id("I2C"):
+    case hash_id("IIC"):
+      internal_type = 'i'; 
       allocated_devices[next_device_index].pinA = stack[arg_start + 1]; // SCL
       allocated_devices[next_device_index].pinB = stack[arg_start + 2]; // SDA
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 3]; // I2C Target Address
@@ -410,24 +432,46 @@ long allocateDevice(char dev_type, int arg_start) {
       #endif
       Wire.begin();
       break;
-    case 'I': //Digital Input. Arguments: (Type, Pin, Pull) or use I, or U.
+
+    case hash_id("I"): //Digital Input. Arguments: (Type, Pin, Pull) or use I, or U.
+    case hash_id("IN"):
+    case hash_id("INPUT"):
+      internal_type = 'I';
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       if (stack[arg_start + 2] == 1) pinMode(allocated_devices[next_device_index].pinA, INPUT_PULLUP);
       else pinMode(allocated_devices[next_device_index].pinA, INPUT);
       break;
-    case 'O': //Digital Output. Arguments: (Type, Pin, Value) or use H, L.
+
+    case hash_id("O"): //Digital Output. Arguments: (Type, Pin, Value) or use H, L.
+    case hash_id("OUT"):
+    case hash_id("OUTPUT"):
+      internal_type = 'O';
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
       digitalWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
-    case 'P': //PWM Output. Arguments: (Type, Pin, Value) or use P.
+
+    case hash_id("P"): //PWM Output. Arguments: (Type, Pin, Value) or use P.
+    case hash_id("PWM"):
+      internal_type = 'P';
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       pinMode(allocated_devices[next_device_index].pinA, OUTPUT);
       analogWrite(allocated_devices[next_device_index].pinA, allocated_devices[next_device_index].shadow_value);
       break;
-    case 'Q': // Analog Quadrature Encoder
+
+    case hash_id("U"):
+    case hash_id("UP"):
+    case hash_id("PULLUP"):
+      internal_type = 'u';
+      allocated_devices[next_device_index].pinA = stack[arg_start + 1];
+      pinMode(allocated_devices[next_device_index].pinA, INPUT_PULLUP);
+      break;
+
+    case hash_id("Q"): // Analog Quadrature Encoder
+    case hash_id("ENCODER"):
+      internal_type = 'Q';
 #ifdef ENCODER_SUPPORT
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].pinB = stack[arg_start + 2];
@@ -451,14 +495,21 @@ long allocateDevice(char dev_type, int arg_start) {
       return 0; // Fail the allocation
 #endif
       break;
-    case 'R': // Servo. Arguments: (Type, Pin, Value) or use R.
+
+    case hash_id("R"): // Servo. Arguments: (Type, Pin, Value) or use R.
+    case hash_id("RC"):
+    case hash_id("SERVO"):
+      internal_type = 'R';
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].shadow_value = stack[arg_start + 2];
       physical_servos[allocated_devices[next_device_index].pinA].attach(allocated_devices[next_device_index].pinA);
       physical_servos[allocated_devices[next_device_index].pinA].write(allocated_devices[next_device_index].shadow_value);
       break;
-    case 'S': // Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
+
+    case hash_id("S"): // Stepper Motor. Arguments: (Type, StepPin, DirPin, MaxVel, Accel).
+    case hash_id("STEPPER"):
 #ifdef STEPPER_SUPPORT
+      internal_type = 'S';
       //TODO: check current_arg_count to ensure we have enough parameters.
       allocated_devices[next_device_index].pinA = stack[arg_start + 1];
       allocated_devices[next_device_index].pinB = stack[arg_start + 2];
@@ -479,7 +530,10 @@ long allocateDevice(char dev_type, int arg_start) {
       return 0;
 #endif
       break;
-    case 'D': //Dynamixel Servo. Arguments: (Type, ServoID, Baudrate)
+
+    case hash_id("D"): //Dynamixel Servo. Arguments: (Type, ServoID, Baudrate)
+    case hash_id("DYNAMIXEL"):
+      internal_type = 'D';
 #ifdef DYNAMIXEL_SUPPORT
       allocated_devices[next_device_index].pinA = stack[arg_start + 1]; // Servo ID
       allocated_devices[next_device_index].shadow_value = 0; 
@@ -496,9 +550,29 @@ long allocateDevice(char dev_type, int arg_start) {
       return 0;
 #endif
       break;
-    case 'T': 
+
+    case hash_id("T"):
+    case hash_id("SERIAL"):
+      internal_type = 'T';
       break;
+      
+    case hash_id("UART"): //placeholder for future UART support
+      internal_type = 'U';
+      break;
+      
+    case hash_id("SPI"): //placeholder for future SPI support
+      internal_type = 's';
+      break;
+
+    default:
+      vm_error("Unknown Device ID");
+      DEBUG_SERIAL.print("\r\n[ERR] Unknown Device Hash: ");
+      DEBUG_SERIAL.println(dev_type_hash);
+      return 0;
   }
+  
+  // Lock in the mapped character type so the rest of the VM works natively!
+  allocated_devices[next_device_index].type = internal_type;
   return next_device_index++;
 }
 
@@ -881,13 +955,19 @@ void processChar(char c) {
     return;
   }
 
-  // Single Quote Character Parsing
+// Single Quote Device ID Hashing (e.g. 'SERVO')
   if (c == '\'') {
-    in_char_literal = !in_char_literal; // Toggle mode
+    if (!in_hash_literal) {
+      in_hash_literal = true;
+      num = 0; // Clear accumulator to start the hash
+    } else {
+      in_hash_literal = false; // Finished! The hash is now locked in 'num'
+    }
     return;
   }
-  if (in_char_literal) {
-    num = c; // Grab the ASCII decimal value
+if (in_hash_literal) {
+    // Force unsigned math, multiply by 131, and add raw ASCII character 'c'
+    num = static_cast<long>(static_cast<uint32_t>(num) * 131 + c);
     return;
   }
 
@@ -1023,7 +1103,7 @@ void processChar(char c) {
     if (func_src.meta.type == TYPE_FUNC && func_src.meta.value == 'D') {
      // Find where our arguments begin on the stack frame
       int arg_start = sp - current_arg_count;
-      char dev_type = (char)stack[arg_start]; 
+      long dev_type = stack[arg_start]; 
       
       long ret_val = allocateDevice(dev_type, arg_start);
 

@@ -60,7 +60,7 @@ for (int i = 0; i < MAX_DEVICES; i++) {
   scope_arg_count = 0;
   quote_pending = false; 
   in_string_literal = false;
-  in_char_literal = false;
+  in_hash_literal = false;
   format_width = 0;
   format_prec = 0;
   mock_out_ptr = 0;
@@ -269,7 +269,7 @@ void runAllTests() {
   runTest("HIL: Active DigIn High Read", "2H\n1000 W\na:3I\n", 'a', 1);
   runTest("HIL: Active DigIn Low Read", "2L\n1000 W\nb:3I\n", 'b', 0);
   runAnalogTest("HIL: PWM/Analog 1", "22P:127\n1000000W\nc:26A\n", 'c', 512, 25);
-  runAnalogTest("HIL: PWM/Analog 2", "22P:63\n500000W\nc:26A\n", 'c', 256, 20);
+  runAnalogTest("HIL: PWM/Analog 2", "22P:63\n1000000W\nc:26A\n", 'c', 256, 20);
 
   runTest(
     "Device: Digital I/O Handle Move", 
@@ -281,7 +281,11 @@ void runAllTests() {
     "o:D('O',2,1)\ni:D('I',3,0)\no:0\n1000 W\nb:i\n", 
     'b', 0
   );
-  runAnalogTest("Device: PWM/Analog", "o:D('P',22,127)\ni:D('A',26)\n500000 W\nc:i\n", 'c', 512, 20);
+  runAnalogTest(
+    "Device: PWM/Analog", 
+    "o:D('PWM',22,127)\ni:D('A',26)\n500000 W\nc:i\n", 
+    'c', 512, 20
+  );
   runHardwareTest(
     "Device: RC Servo Target Stability", 
     "v:D('R',28,90)\nv:120\n", 
@@ -360,9 +364,9 @@ void runAllTests() {
   runTest("Stack Pointer Update", "10, 20,\n", 's', 2);
 
   // TEST 15: Mock Hardware Device Handle
-  // D is the hardware init function. 'M' is type motor. 
+  // D is the hardware init function. Allocating a standard PWM output. 
   // Since 't' defaults to Handle 1, the next allocated device will be Handle 2
-  runTest("Hardware Function Call", "a:D('M', 3, 4)\n", 'a', 2);
+  runTest("Hardware Function Call", "a:D('PWM', 3, 4)\n", 'a', 2);
 
   // TEST 16: Variable Parameter Shadowing
   // We manually spoof entering a subroutine with 2 arguments already on the stack.
