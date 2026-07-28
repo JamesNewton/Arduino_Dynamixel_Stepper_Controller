@@ -48,6 +48,9 @@ for (int i = 0; i < MAX_DEVICES; i++) {
   op = 0; 
   src_dst = false; 
   true_flag = true; 
+  indent.raw = 0; 
+  at_line_start = true; 
+  counted_spaces = 0;
   skip_line = false;
   next_device_index = 1;
   loop_depth = 0; 
@@ -556,7 +559,7 @@ void runAllTests() {
   // 4 leading spaces + "2.50" = 8 total characters.
   runStringTest(
     "Virtual Decimal Format (Padding)", 
-    "a:250\nt:8%2a\n", 
+    "a:250;t:8%2a;", 
     "    2.50"
   );
 
@@ -565,7 +568,7 @@ void runAllTests() {
   // 3 leading spaces + "-2.50" = 8 total characters.
   runStringTest(
     "Virtual Decimal Format (Negative)", 
-    "a:0-250\nt:8%2a\n", 
+    "a:0-250;t:8%2a;",
     "   -2.50"
   );
 
@@ -574,10 +577,40 @@ void runAllTests() {
   // The formatter should automatically insert the leading '0.0'
   runStringTest(
     "Virtual Decimal Format (Leading Zeros)", 
-    "a:5\nt:0%2a\n", 
+    "a:5;t:0%2a;", 
     "0.05"
   );
 
+  // TEST 43: Multiline Indented Conditionals (True Path)
+  runTest(
+    "Indented Block (True Path)", 
+    R"(f:"a>5?
+ b:1
+ c:2
+!
+ b:9
+ c:8
+."
+f(10)
+)", 
+    'c', 2
+  );
+
+  // TEST 44: Multiline Indented Conditionals (False Path)
+  runTest(
+    "Indented Block (False Path)", 
+    R"(f:"a>5?
+ b:1
+ c:2
+!
+ b:9
+ c:8
+."
+f(0)
+)", 
+    'c', 8
+  );
+  
   debugPrintf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);
 }

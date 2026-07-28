@@ -100,6 +100,14 @@ ABCState vars[26];   // Upgrade Registers 'a' through 'z' to Typed States
 #define pc    vars['p'-'a'].meta.value // Alias 'p' to program counter payload value
 
 #define STACK_SIZE 256
+// --- STACK FRAME LAYOUT (Activation Record) ---
+const int FRAME_OFFSET_INDENT = 1;
+const int FRAME_OFFSET_ARGC   = 2;
+const int FRAME_OFFSET_FP     = 3;
+const int FRAME_OFFSET_FLAGS  = 4;
+const int FRAME_OFFSET_SRC    = 5;
+const int FRAME_OFFSET_DST    = 6;
+const int FRAME_HEADER_SIZE   = 6;
 long stack[STACK_SIZE];            // The actual memory stack
 int frame_pointer = 0;      // Points to start of arguments in the current call
 int current_arg_count = 0;  // How many args in the current scope
@@ -122,6 +130,18 @@ ABCState src; // Current Source
 char op = 0;          // Current Operation
 bool src_dst = false; // False = looking for DST, True = looking for SRC
 bool true_flag = true; // For conditionals (?)
+// --- INDENTATION STATE ---
+union IndentState {
+  long raw;                // Allows pushing/popping the entire state to the main stack
+  struct {
+    uint8_t expected;      // How many spaces we expect at the start of the line
+    uint32_t skip_bits:24; // 24-level deep bit "stack" of true/false 'skip' states
+  } meta;
+};
+
+IndentState indent = {0};
+bool at_line_start = true; // Tells the VM we are counting spaces
+uint8_t counted_spaces = 0;
 bool skip_line = false; 
 long active_sub_addr = -1; // Tracks the @ operator address
 
@@ -586,12 +606,15 @@ void executeReturn() {
   
   // Restore previous frame
   sp = frame_pointer; 
-  current_arg_count = stack[--sp];
-  frame_pointer = stack[--sp];
-  long state_flags = stack[--sp];
-  src.raw = stack[--sp];
-  dst.raw = stack[--sp];
+  indent.raw        = stack[frame_pointer - FRAME_OFFSET_INDENT];
+  current_arg_count = stack[frame_pointer - FRAME_OFFSET_ARGC];
+  long old_fp       = stack[frame_pointer - FRAME_OFFSET_FP];
+  long state_flags  = stack[frame_pointer - FRAME_OFFSET_FLAGS];
+  src.raw           = stack[frame_pointer - FRAME_OFFSET_SRC];
+  dst.raw           = stack[frame_pointer - FRAME_OFFSET_DST];
   
+  sp = frame_pointer - FRAME_HEADER_SIZE; // Drop the header
+  frame_pointer = old_fp;
   src_dst = (state_flags & 1) != 0;
   op = (state_flags >> 8) & 0xFF;
   
@@ -934,17 +957,77 @@ case ':':
   src.raw = 0; // The union zero-init clears type, value, and args simultaneously
 }
 
-void processChar(char c) {
+void processChar(char c) { 
+  if (in_hash_literal) {
+    if (c == '\'') in_hash_literal = false;
+    else num = static_cast<long>(static_cast<uint32_t>(num) * 131 + c);
+    return;
+  }
+  if (in_string_literal) {
+    if (c == '"') {
+      if (quote_pending) {
+        if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
+        code_ram[code_ptr++] = '"'; // Escaped quote
+        quote_pending = false;
+      } else {
+        quote_pending = true; 
+      }
+      return;
+    } else {
+      if (quote_pending) {
+        // It was a real ending quote. Terminate and exit string mode.
+        if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
+        in_string_literal = false;
+        quote_pending = false;
+        code_ram[code_ptr++] = '\0';
+        src.meta.type = TYPE_CODE;
+        src.meta.value = num;
+        num = 0;
+        // Fall through to process 'c' (e.g. \n) as a normal character!
+      } else {
+        if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
+        code_ram[code_ptr++] = c;
+        return;
+      }
+    }
+  }
+
+  // Line Start & Space Counting Logic
+  if (at_line_start) {
+    if (c == ' ') {
+      counted_spaces++;
+      return;
+    } else if (c == '\n' || c == '\r') {
+      counted_spaces = 0; // Empty line, keep waiting
+      return;
+    } else {
+      // We hit a real character. Time to evaluate de-denting!
+      while (indent.meta.expected > counted_spaces) {
+        // Is this the final dedent for this level, AND is it our special '!' intercept?
+        if (indent.meta.expected == counted_spaces + 1 && c == '!') {
+          skip_line = !skip_line; // Invert the skip state for the Else block!
+          c = 0; // Consume the '!' so inline handlers below don't see it!
+          break; 
+        }
+        // Normal Dedent: Pop the stack
+        indent.meta.expected--;
+        skip_line = (indent.meta.skip_bits & 1);
+        indent.meta.skip_bits >>= 1;
+      }
+      at_line_start = false;
+      if (c == 0) return; // If we consumed a dedent '!', stop processing this cycle
+    }
+  }
+
+  // The Standard Skip Execution
   if (skip_line) {
     if (c == '\n' || c == '\r') {
-      skip_line = false; // Reset at end of line
-      return;
+      at_line_start = true;
+      counted_spaces = 0;
     } else if (c == '!') {
-      skip_line = false; // Stop skipping so we can process the Else
-      // Don't return, just fall through so the '!' handler can do its job.
-    } else {
-      return;
+      skip_line = false; // Inline else: stop skipping!
     }
+    return; // Ignore all other characters while skipping
   }
 
   // Device Address Indexing Modifier (@)
@@ -955,54 +1038,26 @@ void processChar(char c) {
     return;
   }
 
-// Single Quote Device ID Hashing (e.g. 'SERVO')
-  if (c == '\'') {
-    if (!in_hash_literal) {
-      in_hash_literal = true;
-      num = 0; // Clear accumulator to start the hash
-    } else {
-      in_hash_literal = false; // Finished! The hash is now locked in 'num'
-    }
-    return;
-  }
-if (in_hash_literal) {
-    // Force unsigned math, multiply by 131, and add raw ASCII character 'c'
-    num = static_cast<long>(static_cast<uint32_t>(num) * 131 + c);
+  // Handle Inline Inverted Conditionals (Else / If Not)
+  if (c == '!') {
+    doop(); 
+    skip_line = true; // Inline else: start skipping!
+    src_dst = false; op = 0; 
     return;
   }
 
-  // Double Quote String Parsing & Escaping
-  if (in_string_literal && c == '"') {
-    if (quote_pending) {
-      if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
-      code_ram[code_ptr++] = '"'; // Escaped quote
-      quote_pending = false;
-    } else {
-      quote_pending = true; // Wait to see if the next char is a quote or the end
-    }
+  // Single Quote Hash Start
+  if (c == '\'') {
+    in_hash_literal = true;
+    num = 0;
     return;
-  } else if (in_string_literal) {
-    if (quote_pending) {
-      if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
-      // It was a real ending quote. Terminate and exit string mode.
-      in_string_literal = false;
-      quote_pending = false;
-      code_ram[code_ptr++] = '\0';
-      
-      // Package the string index as the Source
-      src.meta.type = TYPE_CODE;
-      src.meta.value = num;
-      num = 0;
-      // Do NOT return! Let the current character 'c' be processed normally (e.g., \n)
-    } else {
-      if (code_ptr >= CODE_SIZE - 1) { vm_error("RAM OOM"); in_string_literal = false; return; }
-      code_ram[code_ptr++] = c; // Record normal character
-      return;
-    }
-  } else if (c == '"') {
+  }
+
+  // Double Quote String Start
+  if (c == '"') {
     in_string_literal = true;
     quote_pending = false;
-    num = code_ptr; // Save the starting index into the accumulator
+    num = code_ptr;
     return;
   }
 
@@ -1037,7 +1092,7 @@ if (in_hash_literal) {
   // Stack Operators: Call Start
   if (c == '(') {
     // Resolve standalone calls (e.g. "a()") where the function name was captured as a destination
-    if (sp >= STACK_SIZE - 5) {
+    if (sp >= STACK_SIZE - FRAME_HEADER_SIZE) {
       vm_error("Stack Overflow");
       return;
     }
@@ -1066,6 +1121,8 @@ if (in_hash_literal) {
     stack[sp++] = state_flags;
     stack[sp++] = frame_pointer;      // Save caller's frame
     stack[sp++] = current_arg_count;  // Save caller's arg count
+    stack[sp++] = indent.raw;         // Save the caller's indentation state!
+    indent.raw = 0;                   // Start the function with a clean slate!
     //debugPrintf("[CALL START] Pushed frame=%d, arg_count=%d. New sp=%d\r\n", frame_pointer, current_arg_count, sp);
     frame_pointer = sp; // New frame starts here
     src_dst = true;     // Ensure arguments are evaluated as sources
@@ -1097,7 +1154,7 @@ if (in_hash_literal) {
     current_arg_count++;
     // Retrieve the function pointer we saved on the stack
     ABCState func_src;
-    func_src.raw = stack[frame_pointer - 4];
+    func_src.raw = stack[frame_pointer - FRAME_OFFSET_SRC];
     //debugPrintf("[CALL EXEC] Passed num=%ld. Jmp to ptr=%d. scope_arg_count=%d\r\n", num, func_src.meta.value, current_arg_count);
     // COMPLEX DEVICE SYSTEM CALL MANAGER ('D')
     if (func_src.meta.type == TYPE_FUNC && func_src.meta.value == 'D') {
@@ -1108,6 +1165,7 @@ if (in_hash_literal) {
       long ret_val = allocateDevice(dev_type, arg_start);
 
       sp = frame_pointer; // Drop arguments
+      indent.raw = stack[--sp];
       current_arg_count = stack[--sp];
       frame_pointer = stack[--sp];
       long state_flags = stack[--sp];
@@ -1301,18 +1359,16 @@ if (in_hash_literal) {
   // Handle Conditionals
   if (c == '?') {
     doop(); // Evaluate the condition first
+    
+    // Push the current skip state to our bit-stack and increment expected spaces
+    indent.meta.skip_bits = (indent.meta.skip_bits << 1) | (skip_line ? 1 : 0);
+    indent.meta.expected++;
+    
     if (!true_flag) skip_line = true;
     src_dst = false; op = 0; //reset state for next line
     return;
   }
-
-  // Handle Inverted Conditionals (Else/If Not)
-  if (c == '!') {
-    doop(); 
-    if (true_flag) skip_line = true;
-    src_dst = false; op = 0; 
-    return;
-  }
+  // '!' is managed in the dedent logic above, so we don't need to handle it here.
 
   // Immediate Hardware/State Operations (H, L, I, U, W)
   if (c == 'W') { // Wait (Delay in microseconds)
@@ -1334,6 +1390,11 @@ if (in_hash_literal) {
     doop(); 
     num = 0; op = 0; src_dst = false; true_flag = false;
     dst.raw = 0; src.raw = 0; 
+    
+    if (c == '\n' || c == '\r') {
+      at_line_start = true;
+      counted_spaces = 0;
+    }
     return;
   }
 
