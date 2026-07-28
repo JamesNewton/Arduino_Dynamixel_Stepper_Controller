@@ -584,16 +584,17 @@ void runAllTests() {
   // TEST 43: Multiline Indented Conditionals (True Path)
   runTest(
     "Indented Block (True Path)", 
-    R"(f:"a>5?
- b:1
- c:2
+    R"(
+f:"a>5?
+ t:""BIG!""
+ b:2
 !
- b:9
- c:8
+ t:""SMALL""
+ b:8
 ."
 f(10)
 )", 
-    'c', 2
+    'b', 2
   );
 
   // TEST 44: Multiline Indented Conditionals (False Path)

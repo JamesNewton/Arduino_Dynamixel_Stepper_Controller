@@ -61,7 +61,23 @@ g-o are (currently) safe, and u-z.
 `m:D('STEPPER', 3, 4, 1000, 5000)`
 pin 3 is step, 4 direction, and a max velocity of 1000 steps per second, 5000 acceleration. `m:500` to move 500 steps.
 
-Support is coming for I2C devices, encoders, and so on. 
+Support is coming for more devices. 
+
+## Conditionals
+
+'?' is the same as 'if' in most languages, '!' plays the part of else. For example:
+```
+f:"a>5?
+ t:""BIG!""
+ b:2
+!
+ t:""SMALL""
+ b:8
+."
+f(10)
+f(2)
+```
+Will print BIG! and then SMALL.
 
 ## Commands
 
@@ -84,8 +100,8 @@ Support is coming for I2C devices, encoders, and so on.
 | `{` | Less than or equal (ASCII value of `<` plus `=` less 63). |
 | `}` | Greater than or equal (ASCII value of `>` plus `=` less 63). |
 | `~` | Not. Toggle true/false flag. Use with greater less and equal. e.g. `a<b~` will set the true flag if a is greater than or equal to b. `>~` is less than or equal too. `<~` is greater than or equal too. `=~` is not equal. |
-| `?` | if. Skip to the next line or `!` if the comparison fails (not TRUE). |
-| `!` | else. Skip to the next line if the comparison succeeded. |
+| `?` | If the comparison fails skip to the next line and past indented sections or until a `!` (not TRUE).|
+| `!` | else. If the prior comparison succeeded, skip to the next line and past indented sections. |
 | `(` | params. Prep for a function call by pushing state. |
 | `,` | push NUM as an argument to the stack and increment SP. |
 | `)` | call. Push final argument, push PC, set PC to DST, calling the function. |
