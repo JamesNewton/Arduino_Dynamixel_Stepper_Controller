@@ -77,7 +77,7 @@ f:"a>5?
 f(10)
 f(2)
 ```
-Will print BIG! and then SMALL.
+Will print BIG! and then SMALL. Note the double double quotes to put one quote around the messages, while inside the quotes defining "f". Also note that no compiler is needed. The definition of f is it's source code. We just interpret the human readable byte codes to run f.
 
 ## Commands
 
