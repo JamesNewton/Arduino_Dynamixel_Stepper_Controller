@@ -120,6 +120,7 @@ int code_ptr = 0;
 bool quote_pending = false; // For detecting "" escapes
 bool in_string_literal = false;
 bool in_hash_literal = false; // For parsing 'hash'
+bool in_comment = false; // For parsing comments
 long num = 0;                 // Numeric accumulator
 int format_width = 0; 
 int format_prec = 0;
@@ -957,7 +958,19 @@ case ':':
   src.raw = 0; // The union zero-init clears type, value, and args simultaneously
 }
 
-void processChar(char c) { 
+void processChar(char c) {
+  if (in_comment) {
+    if (c == '\n' || c == '\r') {
+      in_comment = false; 
+      // Do NOT return. Let the newline fall through to trigger the execution 
+      // of any valid code that appeared before the comment!
+    } else {
+      return; // Devour the comment characters
+    }
+  } else if (c == '#') {
+    in_comment = true;
+    return;
+  }
   if (in_hash_literal) {
     if (c == '\'') in_hash_literal = false;
     else num = static_cast<long>(static_cast<uint32_t>(num) * 131 + c);

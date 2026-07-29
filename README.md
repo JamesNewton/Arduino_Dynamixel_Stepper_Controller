@@ -109,6 +109,7 @@ Will print BIG! and then SMALL. Note the double double quotes to put one quote a
 | `]` | End loop if true flag is not set. |
 | `.` | return. Cleanup stack, restore PC. |
 | `;` | Line end. Same as `\n`. |
+| `#` | Comment. Runs to the end of the line.
 | `A` | set Port pin in SRC to read analog values in e.g. `a:2A`. |
 | `D` | Device. Complex device like Stepper Motor, I2C, SPI, etc.. See below for details. |
 | `I` | (In) set the Port or Port pin in SRC to an Input. E.g. `a:7I` reads pin 7 to a. |

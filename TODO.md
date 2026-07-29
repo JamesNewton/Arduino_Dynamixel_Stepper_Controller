@@ -1,19 +1,18 @@
 # TODOs
 
-After `?` fails, keep skipping indented lines?
+SPI `D('SPI', MISOpin, MOSIpin, SCKpin)` 
 
-After `?` succeeds, and `!` is being skipped, keep skipping indented lines?
+UART / Serial  `D('UART', TXpin, RXpin, baud)`
 
 J	(Jump) move NUM lines TODO?
 
-When the pin is an input, H and L set or clear TRUE based on the pins value.
-
-SPI `D('s', MISOpin, MOSIpin, SCKpin)` 
-
-UART / Serial  `D('U', TXpin, RXpin, baud)`
-
+When the pin is an input, H and L set or clear TRUE based on the pins value?
 
 # TO DONEs
+
+Comments. # to the end of line.
+
+Intented blocks after ? and !
 
 ## Incremental Blocking String Matcher
 

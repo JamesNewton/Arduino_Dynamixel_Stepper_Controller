@@ -611,7 +611,16 @@ f(0)
 )", 
     'c', 8
   );
-  
+
+  // TEST 45: Comments
+  runTest(
+    "Comment Parsing", 
+    R"(
+a:5 # a:6
+)",
+    'a', 5
+  );
+
   debugPrintf("\r\n--- Test Run Complete: %d/%d Passed ---\r\n", passCount, testCount);
   resetTestState(true);
 }
